@@ -9,7 +9,7 @@ use serde_json::json;
 #[tokio::test]
 async fn test_aws_create_secret_contract() {
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
-    
+
     pact_builder
         .interaction("create a new secret in AWS Secrets Manager", "", |mut i| {
             i.given("AWS credentials are configured");
@@ -37,14 +37,14 @@ async fn test_aws_create_secret_contract() {
 
     let mock_server = pact_builder.start_mock_server(None, None);
     let mock_url = format!("http://{}", mock_server.url());
-    
+
     assert!(!mock_url.is_empty());
 }
 
 #[tokio::test]
 async fn test_aws_put_secret_value_contract() {
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
-    
+
     pact_builder
         .interaction("update an existing secret value", "", |mut i| {
             i.given("a secret exists in AWS Secrets Manager");
@@ -72,14 +72,14 @@ async fn test_aws_put_secret_value_contract() {
 
     let mock_server = pact_builder.start_mock_server(None, None);
     let mock_url = format!("http://{}", mock_server.url());
-    
+
     assert!(!mock_url.is_empty());
 }
 
 #[tokio::test]
 async fn test_aws_get_secret_value_contract() {
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
-    
+
     pact_builder
         .interaction("get the current value of a secret", "", |mut i| {
             i.given("a secret exists with a current version");
@@ -107,14 +107,14 @@ async fn test_aws_get_secret_value_contract() {
 
     let mock_server = pact_builder.start_mock_server(None, None);
     let mock_url = format!("http://{}", mock_server.url());
-    
+
     assert!(!mock_url.is_empty());
 }
 
 #[tokio::test]
 async fn test_aws_describe_secret_contract() {
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
-    
+
     pact_builder
         .interaction("describe a secret to check if it exists", "", |mut i| {
             i.given("a secret exists");
@@ -144,39 +144,40 @@ async fn test_aws_describe_secret_contract() {
 
     let mock_server = pact_builder.start_mock_server(None, None);
     let mock_url = format!("http://{}", mock_server.url());
-    
+
     assert!(!mock_url.is_empty());
 }
 
 #[tokio::test]
 async fn test_aws_secret_not_found_contract() {
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
-    
-    pact_builder
-        .interaction("get a secret that does not exist", "", |mut i| {
-            i.given("the secret does not exist");
-            i.request
-                .method("POST")
-                .path("/")
-                .header("content-type", "application/x-amz-json-1.1")
-                .header("x-amz-target", "secretsmanager.GetSecretValue")
-                .header("authorization", "AWS4-HMAC-SHA256 Credential=test/20240101/us-east-1/secretsmanager/aws4_request")
-                .json_body(json!({
-                    "SecretId": "non-existent-secret"
-                }));
-            i.response
-                .status(400)
-                .header("content-type", "application/x-amz-json-1.1")
-                .json_body(json!({
-                    "__type": "ResourceNotFoundException",
-                    "message": "Secrets Manager can't find the specified secret."
-                }));
-            i
-        });
+
+    pact_builder.interaction("get a secret that does not exist", "", |mut i| {
+        i.given("the secret does not exist");
+        i.request
+            .method("POST")
+            .path("/")
+            .header("content-type", "application/x-amz-json-1.1")
+            .header("x-amz-target", "secretsmanager.GetSecretValue")
+            .header(
+                "authorization",
+                "AWS4-HMAC-SHA256 Credential=test/20240101/us-east-1/secretsmanager/aws4_request",
+            )
+            .json_body(json!({
+                "SecretId": "non-existent-secret"
+            }));
+        i.response
+            .status(400)
+            .header("content-type", "application/x-amz-json-1.1")
+            .json_body(json!({
+                "__type": "ResourceNotFoundException",
+                "message": "Secrets Manager can't find the specified secret."
+            }));
+        i
+    });
 
     let mock_server = pact_builder.start_mock_server(None, None);
     let mock_url = format!("http://{}", mock_server.url());
-    
+
     assert!(!mock_url.is_empty());
 }
-

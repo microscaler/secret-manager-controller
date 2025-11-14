@@ -51,9 +51,9 @@ fn normalize_base_path(base_path: Option<&str>) -> Option<&str> {
 /// - Monolith: {basePath}/{service}/deployment-configuration/profiles/{env}/
 /// - Single service: deployment-configuration/profiles/{env}/
 /// - Backward compatible: deployment-configuration/{env}/ (without profiles)
-/// 
+///
 /// Only processes the specified environment name - does not scan all environments
-/// 
+///
 /// If base_path is None, searches from repository root
 pub async fn find_application_files(
     artifact_path: &Path,
@@ -67,7 +67,7 @@ pub async fn find_application_files(
         None => artifact_path.to_path_buf(),
         Some(path) => artifact_path.join(path),
     };
-    
+
     if !search_path.exists() {
         warn!("Base path does not exist: {}", search_path.display());
         return Ok(vec![]);
@@ -87,7 +87,8 @@ pub async fn find_application_files(
         let path = entry.path();
 
         // Check if this is a deployment-configuration directory
-        if path.file_name()
+        if path
+            .file_name()
             .and_then(|n| n.to_str())
             .map(|n| n == "deployment-configuration")
             .unwrap_or(false)
@@ -174,10 +175,7 @@ pub async fn find_application_files(
     Ok(application_files)
 }
 
-async fn find_files_in_directory(
-    service_name: &str,
-    dir: &Path,
-) -> Result<ApplicationFiles> {
+async fn find_files_in_directory(service_name: &str, dir: &Path) -> Result<ApplicationFiles> {
     let mut app_files = ApplicationFiles {
         service_name: service_name.to_string(),
         base_path: dir.to_path_buf(),
@@ -190,7 +188,7 @@ async fn find_files_in_directory(
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        
+
         if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
             match file_name {
                 "application.secrets.env" => {
@@ -212,9 +210,7 @@ async fn find_files_in_directory(
 
 impl ApplicationFiles {
     pub fn has_any_files(&self) -> bool {
-        self.secrets_env.is_some()
-            || self.secrets_yaml.is_some()
-            || self.properties.is_some()
+        self.secrets_env.is_some() || self.secrets_yaml.is_some() || self.properties.is_some()
     }
 }
 
@@ -275,7 +271,7 @@ async fn parse_env_file(
 
     for line in content.lines() {
         let line = line.trim();
-        
+
         // Skip comments and empty lines
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -311,8 +307,7 @@ async fn parse_yaml_secrets(
     };
 
     // Parse YAML as key-value pairs
-    let yaml: serde_yaml::Value = serde_yaml::from_str(&content)
-        .context("Failed to parse YAML")?;
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&content).context("Failed to parse YAML")?;
 
     let mut secrets = HashMap::new();
     flatten_yaml_value(&yaml, String::new(), &mut secrets);
@@ -320,7 +315,11 @@ async fn parse_yaml_secrets(
     Ok(secrets)
 }
 
-fn flatten_yaml_value(value: &serde_yaml::Value, prefix: String, result: &mut HashMap<String, String>) {
+fn flatten_yaml_value(
+    value: &serde_yaml::Value,
+    prefix: String,
+    result: &mut HashMap<String, String>,
+) {
     match value {
         serde_yaml::Value::Mapping(map) => {
             for (key, val) in map {
@@ -367,7 +366,7 @@ async fn parse_properties_file(path: &Path) -> Result<HashMap<String, String>> {
 
     for line in content.lines() {
         let line = line.trim();
-        
+
         // Skip comments and empty lines
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -391,46 +390,45 @@ fn is_sops_encrypted(content: &str) -> bool {
     // 1. YAML files start with "sops:" key
     // 2. JSON files have "sops" key at root
     // 3. ENV files might have SOPS metadata comments
-    
+
     // Try parsing as YAML first (most common)
     if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(content) {
-        if yaml.as_mapping()
+        if yaml
+            .as_mapping()
             .and_then(|m| m.get(&serde_yaml::Value::String("sops".to_string())))
-            .is_some() {
+            .is_some()
+        {
             return true;
         }
     }
-    
+
     // Try parsing as JSON
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(content) {
         if json.get("sops").is_some() {
             return true;
         }
     }
-    
+
     // Check for SOPS metadata in comments (for ENV files)
     if content.contains("sops_version") || content.contains("sops_encrypted") {
         return true;
     }
-    
+
     false
 }
 
 /// Decrypt SOPS-encrypted content using rops
 /// Note: This is a placeholder implementation. rops crate API may need adjustment.
-async fn decrypt_sops_content(
-    _content: &str,
-    sops_private_key: Option<&str>,
-) -> Result<String> {
+async fn decrypt_sops_content(_content: &str, sops_private_key: Option<&str>) -> Result<String> {
     // For now, we'll use a simplified approach:
     // If a private key is provided, we can attempt decryption
     // Otherwise, we'll need to rely on the sops binary or proper rops integration
-    
+
     // TODO: Implement proper SOPS decryption using rops crate
     // The rops crate API needs to be verified - it may require different usage patterns
     // For now, return an error indicating SOPS decryption is not yet fully implemented
     // In production, this should call the sops binary or use rops properly
-    
+
     if sops_private_key.is_some() {
         // Attempt decryption with provided key
         // This is a placeholder - actual implementation depends on rops API
@@ -442,4 +440,3 @@ async fn decrypt_sops_content(
         return Err(anyhow::anyhow!("SOPS decryption not yet implemented - please use unencrypted files or provide private key"));
     }
 }
-

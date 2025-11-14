@@ -7,16 +7,16 @@
 //! - Retrieve secret values
 //! - Support Workload Identity and Service Principal authentication
 
+use crate::metrics;
+use crate::provider::SecretManagerProvider;
+use crate::{AzureAuthConfig, AzureConfig};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use azure_core::credentials::TokenCredential;
-use azure_identity::{WorkloadIdentityCredential, DeveloperToolsCredential, ClientSecretCredential, ClientSecretCredentialOptions};
+use azure_identity::{DeveloperToolsCredential, WorkloadIdentityCredential};
 use azure_security_keyvault_secrets::{models::SetSecretParameters, SecretClient};
 use std::sync::Arc;
-use tracing::{debug, info, warn};
-use crate::metrics;
-use crate::provider::SecretManagerProvider;
-use crate::{AzureConfig, AzureAuthConfig};
+use tracing::{debug, info};
 
 /// Azure Key Vault provider implementation
 pub struct AzureKeyVault {
@@ -27,7 +27,7 @@ pub struct AzureKeyVault {
 impl AzureKeyVault {
     /// Create a new Azure Key Vault client
     /// Supports both Service Principal and Workload Identity
-    pub async fn new(config: &AzureConfig, k8s_client: &kube::Client) -> Result<Self> {
+    pub async fn new(config: &AzureConfig, _k8s_client: &kube::Client) -> Result<Self> {
         // Construct vault URL from vault name
         // Format: https://{vault-name}.vault.azure.net/
         let vault_url = if config.vault_name.starts_with("https://") {
@@ -40,7 +40,10 @@ impl AzureKeyVault {
         // Default to Workload Identity when auth is not specified
         let credential: Arc<dyn TokenCredential> = match &config.auth {
             Some(AzureAuthConfig::WorkloadIdentity { client_id }) => {
-                info!("Using Azure Workload Identity authentication with client ID: {}", client_id);
+                info!(
+                    "Using Azure Workload Identity authentication with client ID: {}",
+                    client_id
+                );
                 info!("Ensure pod service account has Azure Workload Identity configured");
                 let mut options = azure_identity::WorkloadIdentityCredentialOptions::default();
                 options.client_id = Some(client_id.clone());
@@ -64,29 +67,28 @@ impl AzureKeyVault {
             _vault_url: vault_url,
         })
     }
-
 }
 
 #[async_trait]
 impl SecretManagerProvider for AzureKeyVault {
-    async fn create_or_update_secret(
-        &self,
-        secret_name: &str,
-        secret_value: &str,
-    ) -> Result<bool> {
+    async fn create_or_update_secret(&self, secret_name: &str, secret_value: &str) -> Result<bool> {
         let start = std::time::Instant::now();
-        
+
         // Check if secret exists by trying to get it
         let current_value = self.get_secret_value(secret_name).await?;
-        
+
         if let Some(current) = current_value {
             if current == secret_value {
                 debug!("Azure secret {} unchanged, skipping update", secret_name);
-                metrics::record_secret_operation("azure", "no_change", start.elapsed().as_secs_f64());
+                metrics::record_secret_operation(
+                    "azure",
+                    "no_change",
+                    start.elapsed().as_secs_f64(),
+                );
                 return Ok(false);
             }
         }
-        
+
         // Create or update secret
         // Azure Key Vault automatically creates a new version when updating
         info!("Creating/updating Azure secret: {}", secret_name);
@@ -95,8 +97,11 @@ impl SecretManagerProvider for AzureKeyVault {
         self.client
             .set_secret(secret_name, parameters.try_into()?, None)
             .await
-            .context(format!("Failed to create/update Azure secret: {}", secret_name))?;
-        
+            .context(format!(
+                "Failed to create/update Azure secret: {}",
+                secret_name
+            ))?;
+
         metrics::record_secret_operation("azure", "update", start.elapsed().as_secs_f64());
         Ok(true)
     }
@@ -116,7 +121,10 @@ impl SecretManagerProvider for AzureKeyVault {
             }
             Err(e) => {
                 let error_msg = e.to_string();
-                if error_msg.contains("SecretNotFound") || error_msg.contains("404") || error_msg.contains("not found") {
+                if error_msg.contains("SecretNotFound")
+                    || error_msg.contains("404")
+                    || error_msg.contains("not found")
+                {
                     Ok(None)
                 } else {
                     Err(anyhow::anyhow!("Failed to get Azure secret: {}", e))
@@ -137,8 +145,7 @@ impl SecretManagerProvider for AzureKeyVault {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{AzureConfig, AzureAuthConfig};
+    use crate::{AzureAuthConfig, AzureConfig};
 
     #[test]
     fn test_azure_config_workload_identity() {
@@ -148,26 +155,8 @@ mod tests {
                 client_id: "12345678-1234-1234-1234-123456789012".to_string(),
             }),
         };
-        
-        assert_eq!(config.vault_name, "my-vault");
-        match config.auth {
-            Some(AzureAuthConfig::WorkloadIdentity { client_id }) => {
-                assert_eq!(client_id, "12345678-1234-1234-1234-123456789012");
-            }
-            _ => panic!("Expected WorkloadIdentity auth config"),
-        }
-    }
 
-    #[test]
-    fn test_azure_config_workload_identity() {
-        let config = AzureConfig {
-            vault_name: "test-vault".to_string(),
-            auth: Some(AzureAuthConfig::WorkloadIdentity {
-                client_id: "12345678-1234-1234-1234-123456789012".to_string(),
-            }),
-        };
-        
-        assert_eq!(config.vault_name, "test-vault");
+        assert_eq!(config.vault_name, "my-vault");
         match config.auth {
             Some(AzureAuthConfig::WorkloadIdentity { client_id }) => {
                 assert_eq!(client_id, "12345678-1234-1234-1234-123456789012");
@@ -182,7 +171,7 @@ mod tests {
             vault_name: "prod-vault".to_string(),
             auth: None,
         };
-        
+
         assert_eq!(config.vault_name, "prod-vault");
         assert!(config.auth.is_none());
     }
@@ -220,15 +209,14 @@ mod tests {
     fn test_azure_secret_name_validation() {
         // Azure Key Vault secret names must be 1-127 characters
         // Can contain letters, numbers, and hyphens
-        let valid_names = vec![
-            "my-secret",
-            "my-secret-123",
-            "MySecret",
-            "my_secret",
-        ];
-        
+        let valid_names = vec!["my-secret", "my-secret-123", "MySecret", "my_secret"];
+
         for name in valid_names {
-            assert!(name.len() >= 1 && name.len() <= 127, "Secret name {} should be valid", name);
+            assert!(
+                name.len() >= 1 && name.len() <= 127,
+                "Secret name {} should be valid",
+                name
+            );
         }
     }
 }

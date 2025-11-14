@@ -15,29 +15,48 @@ use tracing::info;
 use crate::OtelConfig;
 
 /// Initialize OpenTelemetry tracing based on configuration
-/// 
+///
 /// Returns `Ok(None)` if OpenTelemetry is not configured (no CRD config and no env vars).
 /// This allows users to skip Otel entirely if they don't have an Otel endpoint.
-/// 
+///
 /// Currently logs the configuration. Full implementation pending API stabilization.
 pub fn init_otel(config: Option<&OtelConfig>) -> Result<Option<()>> {
     match config {
-        Some(OtelConfig::Otlp { endpoint, service_name, service_version, environment }) => {
+        Some(OtelConfig::Otlp {
+            endpoint,
+            service_name,
+            service_version,
+            environment,
+        }) => {
             info!(
                 "OpenTelemetry OTLP configured: endpoint={}, service={}, version={}, env={:?}",
                 endpoint,
-                service_name.as_deref().unwrap_or("secret-manager-controller"),
-                service_version.as_deref().unwrap_or(env!("CARGO_PKG_VERSION")),
+                service_name
+                    .as_deref()
+                    .unwrap_or("secret-manager-controller"),
+                service_version
+                    .as_deref()
+                    .unwrap_or(env!("CARGO_PKG_VERSION")),
                 environment
             );
             info!("Note: Full Otel implementation pending - configuration logged only");
             Ok(Some(()))
         }
-        Some(OtelConfig::Datadog { service_name, service_version, environment, site, api_key }) => {
+        Some(OtelConfig::Datadog {
+            service_name,
+            service_version,
+            environment,
+            site,
+            api_key,
+        }) => {
             info!(
                 "Datadog OpenTelemetry configured: service={}, version={}, env={:?}, site={:?}",
-                service_name.as_deref().unwrap_or("secret-manager-controller"),
-                service_version.as_deref().unwrap_or(env!("CARGO_PKG_VERSION")),
+                service_name
+                    .as_deref()
+                    .unwrap_or("secret-manager-controller"),
+                service_version
+                    .as_deref()
+                    .unwrap_or(env!("CARGO_PKG_VERSION")),
                 environment,
                 site.as_deref().unwrap_or("datadoghq.com")
             );
@@ -49,9 +68,10 @@ pub fn init_otel(config: Option<&OtelConfig>) -> Result<Option<()>> {
         }
         None => {
             // Check environment variables
-            if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() 
-                || std::env::var("DD_API_KEY").is_ok() 
-                || std::env::var("DD_SITE").is_ok() {
+            if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok()
+                || std::env::var("DD_API_KEY").is_ok()
+                || std::env::var("DD_SITE").is_ok()
+            {
                 info!("OpenTelemetry environment variables detected");
                 info!("Note: Full Otel implementation pending - environment variables logged only");
                 return Ok(Some(()));

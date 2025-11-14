@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
     group = "secret-management.microscaler.io",
     version = "v1",
     namespaced,
-    status = "SecretManagerConfigStatus",
+    status = "SecretManagerConfigStatus"
 )]
 #[serde(rename_all = "camelCase")]
 struct SecretManagerConfigSpec {
@@ -166,9 +166,11 @@ async fn main() -> Result<()> {
         .context("Failed to create Kubernetes client. Ensure kubeconfig is configured.")?;
 
     match cli.command {
-        Commands::Reconcile { name, namespace, force } => {
-            reconcile_command(client, name, namespace.or(cli.namespace), force).await
-        }
+        Commands::Reconcile {
+            name,
+            namespace,
+            force,
+        } => reconcile_command(client, name, namespace.or(cli.namespace), force).await,
         Commands::List { namespace } => list_command(client, namespace.or(cli.namespace)).await,
         Commands::Status { name, namespace } => {
             status_command(client, name, namespace.or(cli.namespace)).await
@@ -185,7 +187,7 @@ async fn reconcile_command(
     force: bool,
 ) -> Result<()> {
     let ns = namespace.as_deref().unwrap_or("default");
-    
+
     // Create API for SecretManagerConfig
     let api: Api<SecretManagerConfig> = Api::namespaced(client.clone(), ns);
 
@@ -197,11 +199,12 @@ async fn reconcile_command(
         // Step 1: Get the resource spec before deletion (for verification)
         let existing = api.get(&name).await;
         let resource_exists = existing.is_ok();
-        
+
         if !resource_exists {
             return Err(anyhow::anyhow!(
                 "Resource '{}/{}' does not exist. Cannot force reconcile.",
-                ns, name
+                ns,
+                name
             ));
         }
 
@@ -253,7 +256,9 @@ async fn reconcile_command(
                 }
                 Err(e) => {
                     // Log error but continue waiting
-                    let elapsed_since_log = SystemTime::now().duration_since(last_log).unwrap_or(Duration::from_secs(0));
+                    let elapsed_since_log = SystemTime::now()
+                        .duration_since(last_log)
+                        .unwrap_or(Duration::from_secs(0));
                     if elapsed_since_log > Duration::from_secs(10) {
                         eprintln!("   ⚠️  Error checking resource: {}", e);
                         last_log = SystemTime::now();
@@ -263,7 +268,9 @@ async fn reconcile_command(
 
             // Log progress every 10 seconds
             let elapsed = SystemTime::now().duration_since(start).unwrap();
-            let elapsed_since_log = SystemTime::now().duration_since(last_log).unwrap_or(Duration::from_secs(0));
+            let elapsed_since_log = SystemTime::now()
+                .duration_since(last_log)
+                .unwrap_or(Duration::from_secs(0));
             if elapsed_since_log > Duration::from_secs(10) {
                 println!("   ⏳ Still waiting... ({}s elapsed)", elapsed.as_secs());
                 last_log = SystemTime::now();
@@ -276,7 +283,8 @@ async fn reconcile_command(
             return Err(anyhow::anyhow!(
                 "Timeout waiting for resource '{}/{}' to be recreated by GitOps. \
                 The resource may not be managed by GitOps, or the sync interval is too long.",
-                ns, name
+                ns,
+                name
             ));
         }
 
@@ -288,7 +296,10 @@ async fn reconcile_command(
 
     // Step 5: Trigger reconciliation
     println!();
-    println!("🔄 Triggering reconciliation for SecretManagerConfig '{}/{}'...", ns, name);
+    println!(
+        "🔄 Triggering reconciliation for SecretManagerConfig '{}/{}'...",
+        ns, name
+    );
 
     // Get current timestamp for annotation
     let timestamp = SystemTime::now()
@@ -308,7 +319,7 @@ async fn reconcile_command(
     });
 
     let patch_params = PatchParams::apply("msmctl").force();
-    
+
     api.patch(&name, &patch_params, &Patch::Merge(patch))
         .await
         .with_context(|| format!("Failed to trigger reconciliation for '{}/{}'", ns, name))?;
@@ -316,7 +327,7 @@ async fn reconcile_command(
     println!("✅ Reconciliation triggered successfully");
     println!("   Resource: {}/{}", ns, name);
     println!("   Timestamp: {}", timestamp);
-    
+
     if force {
         println!();
         println!("📊 Watching reconciliation logs...");
@@ -331,7 +342,10 @@ async fn reconcile_command(
 /// List all SecretManagerConfig resources
 async fn list_command(client: Client, namespace: Option<String>) -> Result<()> {
     let api: Api<SecretManagerConfig> = if let Some(ns) = namespace {
-        println!("Listing SecretManagerConfig resources in namespace '{}'...", ns);
+        println!(
+            "Listing SecretManagerConfig resources in namespace '{}'...",
+            ns
+        );
         Api::namespaced(client, &ns)
     } else {
         println!("Listing SecretManagerConfig resources in all namespaces...");
@@ -348,22 +362,28 @@ async fn list_command(client: Client, namespace: Option<String>) -> Result<()> {
         return Ok(());
     }
 
-    println!("\n{:<30} {:<20} {:<15} {:<15}", "NAME", "NAMESPACE", "READY", "SECRETS SYNCED");
+    println!(
+        "\n{:<30} {:<20} {:<15} {:<15}",
+        "NAME", "NAMESPACE", "READY", "SECRETS SYNCED"
+    );
     println!("{}", "-".repeat(80));
 
     for config in configs.items {
         let name = config.metadata.name.as_deref().unwrap_or("<unknown>");
         let ns = config.metadata.namespace.as_deref().unwrap_or("<unknown>");
-        
+
         // Get status
         let ready = config
             .status
             .as_ref()
             .and_then(|s| {
-                s.conditions
-                    .iter()
-                    .find(|c| c.r#type == "Ready")
-                    .map(|c| if c.status == "True" { "True" } else { "False" })
+                s.conditions.iter().find(|c| c.r#type == "Ready").map(|c| {
+                    if c.status == "True" {
+                        "True"
+                    } else {
+                        "False"
+                    }
+                })
             })
             .unwrap_or("Unknown");
 
@@ -374,20 +394,19 @@ async fn list_command(client: Client, namespace: Option<String>) -> Result<()> {
             .map(|n| n.to_string())
             .unwrap_or_else(|| "-".to_string());
 
-        println!("{:<30} {:<20} {:<15} {:<15}", name, ns, ready, secrets_synced);
+        println!(
+            "{:<30} {:<20} {:<15} {:<15}",
+            name, ns, ready, secrets_synced
+        );
     }
 
     Ok(())
 }
 
 /// Show detailed status of a SecretManagerConfig resource
-async fn status_command(
-    client: Client,
-    name: String,
-    namespace: Option<String>,
-) -> Result<()> {
+async fn status_command(client: Client, name: String, namespace: Option<String>) -> Result<()> {
     let ns = namespace.as_deref().unwrap_or("default");
-    
+
     println!("Status for SecretManagerConfig '{}/{}':\n", ns, name);
 
     let api: Api<SecretManagerConfig> = Api::namespaced(client, ns);
@@ -399,8 +418,14 @@ async fn status_command(
 
     // Print basic info
     println!("Metadata:");
-    println!("  Name: {}", config.metadata.name.as_deref().unwrap_or("<unknown>"));
-    println!("  Namespace: {}", config.metadata.namespace.as_deref().unwrap_or("<unknown>"));
+    println!(
+        "  Name: {}",
+        config.metadata.name.as_deref().unwrap_or("<unknown>")
+    );
+    println!(
+        "  Namespace: {}",
+        config.metadata.namespace.as_deref().unwrap_or("<unknown>")
+    );
     if let Some(gen) = config.metadata.generation {
         println!("  Generation: {}", gen);
     }
@@ -409,7 +434,10 @@ async fn status_command(
     println!("\nSpec:");
     println!("  GCP Project ID: {}", config.spec.gcp_project_id);
     println!("  Environment: {}", config.spec.environment);
-    println!("  Source: {}/{}", config.spec.source_ref.kind, config.spec.source_ref.name);
+    println!(
+        "  Source: {}/{}",
+        config.spec.source_ref.kind, config.spec.source_ref.name
+    );
     if let Some(ref kustomize_path) = config.spec.kustomize_path {
         println!("  Kustomize Path: {}", kustomize_path);
     }
@@ -426,15 +454,15 @@ async fn status_command(
     // Print status
     if let Some(ref status) = config.status {
         println!("\nStatus:");
-        
+
         if let Some(gen) = status.observed_generation {
             println!("  Observed Generation: {}", gen);
         }
-        
+
         if let Some(ref time) = status.last_reconcile_time {
             println!("  Last Reconcile Time: {}", time);
         }
-        
+
         if let Some(count) = status.secrets_synced {
             println!("  Secrets Synced: {}", count);
         }
@@ -460,4 +488,3 @@ async fn status_command(
 
     Ok(())
 }
-

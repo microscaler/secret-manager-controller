@@ -26,8 +26,8 @@
 // In a production setup, you'd move shared types to lib.rs
 
 use kube::{core::CustomResourceExt, CustomResource};
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
-use schemars::{JsonSchema, SchemaGenerator, Schema};
 use std::borrow::Cow;
 
 // Re-define the types needed for CRD generation
@@ -79,7 +79,10 @@ impl JsonSchema for ProviderConfig {
         let mut schema_value: serde_json::Value = schema.into();
         if let serde_json::Value::Object(ref mut map) = schema_value {
             map.insert("description".to_string(), serde_json::json!("Cloud provider configuration. Supports GCP, AWS, and Azure. Must have a 'type' field set to 'gcp', 'aws', or 'azure'."));
-            map.insert("x-kubernetes-preserve-unknown-fields".to_string(), serde_json::json!(true));
+            map.insert(
+                "x-kubernetes-preserve-unknown-fields".to_string(),
+                serde_json::json!(true),
+            );
         }
         Schema::try_from(schema_value).expect("Failed to create Schema from modified Value")
     }
@@ -94,11 +97,13 @@ fn auth_config_schema(gen: &mut SchemaGenerator) -> Schema {
     let mut schema_value: serde_json::Value = schema.into();
     if let serde_json::Value::Object(ref mut map) = schema_value {
         map.insert("description".to_string(), serde_json::json!("Authentication configuration. Supports multiple auth types via discriminated union."));
-        map.insert("x-kubernetes-preserve-unknown-fields".to_string(), serde_json::json!(true));
+        map.insert(
+            "x-kubernetes-preserve-unknown-fields".to_string(),
+            serde_json::json!(true),
+        );
     }
     Schema::try_from(schema_value).expect("Failed to create Schema from modified Value")
 }
-
 
 /// GCP configuration for Secret Manager
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -153,9 +158,7 @@ pub enum GcpAuthConfig {
     /// Use Workload Identity for authentication (DEFAULT)
     /// Requires GKE cluster with Workload Identity enabled
     /// This is the recommended authentication method and is used by default when auth is not specified
-    WorkloadIdentity {
-        service_account_email: String,
-    },
+    WorkloadIdentity { service_account_email: String },
 }
 
 /// AWS authentication configuration
@@ -166,9 +169,7 @@ pub enum AwsAuthConfig {
     /// Use IRSA (IAM Roles for Service Accounts) for authentication (DEFAULT)
     /// Requires EKS cluster with IRSA enabled and service account annotation
     /// This is the recommended authentication method and is used by default when auth is not specified
-    Irsa {
-        role_arn: String,
-    },
+    Irsa { role_arn: String },
 }
 
 /// Azure authentication configuration
@@ -179,9 +180,7 @@ pub enum AzureAuthConfig {
     /// Use Workload Identity for authentication (DEFAULT)
     /// Requires AKS cluster with Workload Identity enabled
     /// This is the recommended authentication method and is used by default when auth is not specified
-    WorkloadIdentity {
-        client_id: String,
-    },
+    WorkloadIdentity { client_id: String },
 }
 
 /// OpenTelemetry configuration
@@ -209,26 +208,6 @@ pub enum OtelConfig {
         #[serde(default)]
         api_key: Option<String>,
     },
-}
-
-fn default_json_secret_name() -> String {
-    "gcp-secret-manager-credentials".to_string()
-}
-
-fn default_json_secret_key() -> String {
-    "key.json".to_string()
-}
-
-fn default_aws_secret_name() -> String {
-    "aws-secret-manager-credentials".to_string()
-}
-
-fn default_aws_access_key_id_key() -> String {
-    "access-key-id".to_string()
-}
-
-fn default_aws_secret_access_key_key() -> String {
-    "secret-access-key".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -273,7 +252,7 @@ pub struct Condition {
 fn main() {
     // Generate CRD YAML
     let crd = SecretManagerConfig::crd();
-    
+
     // Serialize to YAML
     match serde_yaml::to_string(&crd) {
         Ok(yaml) => {

@@ -99,7 +99,7 @@ pub fn register_metrics() -> Result<()> {
     REGISTRY.register(Box::new(SECRETS_MANAGED.clone()))?;
     REGISTRY.register(Box::new(GCP_SECRET_MANAGER_OPERATIONS_TOTAL.clone()))?;
     REGISTRY.register(Box::new(GCP_SECRET_MANAGER_OPERATION_DURATION.clone()))?;
-    
+
     Ok(())
 }
 
@@ -142,5 +142,3 @@ pub fn record_secret_operation(_provider: &str, _operation: &str, duration: f64)
     GCP_SECRET_MANAGER_OPERATIONS_TOTAL.inc();
     GCP_SECRET_MANAGER_OPERATION_DURATION.observe(duration);
 }
-
-

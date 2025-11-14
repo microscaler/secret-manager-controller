@@ -9,13 +9,7 @@
 //!
 //! The server runs on port 5000 by default (configurable via `METRICS_PORT` environment variable).
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-    Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Router};
 use prometheus::{Encoder, TextEncoder};
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -34,11 +28,11 @@ pub async fn start_server(port: u16, state: Arc<ServerState>) -> Result<(), anyh
 
     let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr).await?;
-    
+
     info!("HTTP server listening on {}", addr);
-    
+
     axum::serve(listener, app).await?;
-    
+
     Ok(())
 }
 
@@ -50,7 +44,7 @@ fn gather() -> Vec<prometheus::proto::MetricFamily> {
 async fn metrics_handler() -> impl IntoResponse {
     let encoder = TextEncoder::new();
     let metric_families = gather();
-    
+
     let mut buffer = Vec::new();
     if let Err(e) = encoder.encode(&metric_families, &mut buffer) {
         error!("Failed to encode metrics: {}", e);
@@ -60,7 +54,7 @@ async fn metrics_handler() -> impl IntoResponse {
             format!("Failed to encode metrics: {}", e).into_bytes(),
         );
     }
-    
+
     (
         StatusCode::OK,
         [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
@@ -79,4 +73,3 @@ async fn readyz_handler(State(state): State<Arc<ServerState>>) -> impl IntoRespo
         StatusCode::SERVICE_UNAVAILABLE
     }
 }
-

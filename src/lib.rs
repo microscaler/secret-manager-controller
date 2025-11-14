@@ -74,9 +74,7 @@ pub struct AzureConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", tag = "authType")]
 pub enum AwsAuthConfig {
-    Irsa {
-        role_arn: String,
-    },
+    Irsa { role_arn: String },
 }
 
 /// Azure authentication configuration
@@ -84,9 +82,7 @@ pub enum AwsAuthConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", tag = "authType")]
 pub enum AzureAuthConfig {
-    WorkloadIdentity {
-        client_id: String,
-    },
+    WorkloadIdentity { client_id: String },
 }
 
 /// GCP configuration for Secret Manager
@@ -131,9 +127,7 @@ fn default_source_kind() -> String {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", tag = "authType")]
 pub enum GcpAuthConfig {
-    WorkloadIdentity {
-        service_account_email: String,
-    },
+    WorkloadIdentity { service_account_email: String },
 }
 
 /// OpenTelemetry configuration

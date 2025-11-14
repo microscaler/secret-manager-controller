@@ -28,14 +28,8 @@
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
-use kube::{
-    api::Api,
-    Client, CustomResource,
-};
-use kube_runtime::{
-    watcher, Controller,
-    controller::Action,
-};
+use kube::{api::Api, Client, CustomResource};
+use kube_runtime::{controller::Action, watcher, Controller};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info};
@@ -52,7 +46,7 @@ pub mod reconciler;
 pub mod server;
 
 use reconciler::Reconciler;
-use server::{ServerState, start_server};
+use server::{start_server, ServerState};
 
 /// SecretManagerConfig Custom Resource Definition
 ///
@@ -332,8 +326,8 @@ async fn main() -> Result<()> {
     // This will set up tracing with Otel support
     // Note: Otel config can come from CRD, but we initialize early from env vars
     // Per-resource Otel config is handled in the reconciler
-    let otel_tracer_provider = otel::init_otel(None)
-        .context("Failed to initialize OpenTelemetry")?;
+    let otel_tracer_provider =
+        otel::init_otel(None).context("Failed to initialize OpenTelemetry")?;
 
     // If Otel wasn't initialized, use standard tracing subscriber
     if otel_tracer_provider.is_none() {
@@ -361,7 +355,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "5000".to_string())
         .parse::<u16>()
         .unwrap_or(5000);
-    
+
     tokio::spawn(async move {
         if let Err(e) = start_server(server_port, server_state_clone).await {
             error!("HTTP server error: {}", e);
@@ -379,7 +373,9 @@ async fn main() -> Result<()> {
     let reconciler = Arc::new(Reconciler::new(client.clone()).await?);
 
     // Mark as ready
-    server_state.is_ready.store(true, std::sync::atomic::Ordering::Relaxed);
+    server_state
+        .is_ready
+        .store(true, std::sync::atomic::Ordering::Relaxed);
 
     // Create controller
     Controller::new(configs, watcher::Config::default())
@@ -387,8 +383,11 @@ async fn main() -> Result<()> {
         .run(
             reconciler::Reconciler::reconcile,
             |obj, error, _ctx| {
-                error!("Reconciliation error for {}: {:?}", 
-                    obj.metadata.name.as_deref().unwrap_or("unknown"), error);
+                error!(
+                    "Reconciliation error for {}: {:?}",
+                    obj.metadata.name.as_deref().unwrap_or("unknown"),
+                    error
+                );
                 metrics::increment_reconciliation_errors();
                 Action::requeue(std::time::Duration::from_secs(60))
             },
@@ -398,10 +397,9 @@ async fn main() -> Result<()> {
         .await;
 
     info!("Controller stopped");
-    
+
     // Shutdown OpenTelemetry tracer provider if it was initialized
     otel::shutdown_otel(otel_tracer_provider);
-    
+
     Ok(())
 }
-

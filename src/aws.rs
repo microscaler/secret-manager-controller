@@ -7,14 +7,14 @@
 //! - Retrieve secret values
 //! - Support IRSA (IAM Roles for Service Accounts) authentication
 
+use crate::metrics;
+use crate::provider::SecretManagerProvider;
+use crate::{AwsAuthConfig, AwsConfig};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use aws_config::SdkConfig;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
-use tracing::{debug, info, warn};
-use crate::metrics;
-use crate::provider::SecretManagerProvider;
-use crate::{AwsConfig, AwsAuthConfig};
+use tracing::{debug, info};
 
 /// AWS Secrets Manager provider implementation
 pub struct AwsSecretManager {
@@ -27,7 +27,7 @@ impl AwsSecretManager {
     /// Supports both Access Keys and IRSA (IAM Roles for Service Accounts)
     pub async fn new(config: &AwsConfig, k8s_client: &kube::Client) -> Result<Self> {
         let region = config.region.clone();
-        
+
         // Build AWS SDK config based on authentication method
         // Default to IRSA when auth is not specified
         let sdk_config = match &config.auth {
@@ -61,16 +61,16 @@ impl AwsSecretManager {
         // 1. Pod has service account annotation: eks.amazonaws.com/role-arn
         // 2. AWS SDK automatically discovers the role ARN from the pod's service account
         // 3. SDK uses the pod's identity token to assume the role
-        
+
         // For now, we'll use the AWS SDK's default credential chain which supports IRSA
         // The role ARN from the config is informational - the actual role comes from the pod annotation
         info!("IRSA authentication: Ensure pod service account has annotation: eks.amazonaws.com/role-arn={}", role_arn);
-        
+
         let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .region(aws_config::Region::new(region.to_string()))
             .load()
             .await;
-        
+
         Ok(sdk_config)
     }
 
@@ -80,28 +80,25 @@ impl AwsSecretManager {
             .region(aws_config::Region::new(region.to_string()))
             .load()
             .await;
-        
+
         Ok(sdk_config)
     }
 }
 
 #[async_trait]
 impl SecretManagerProvider for AwsSecretManager {
-    async fn create_or_update_secret(
-        &self,
-        secret_name: &str,
-        secret_value: &str,
-    ) -> Result<bool> {
+    async fn create_or_update_secret(&self, secret_name: &str, secret_value: &str) -> Result<bool> {
         let start = std::time::Instant::now();
-        
+
         // Check if secret exists
-        let secret_exists = self.client
+        let secret_exists = self
+            .client
             .describe_secret()
             .secret_id(secret_name)
             .send()
             .await
             .is_ok();
-        
+
         if !secret_exists {
             // Create secret
             info!("Creating AWS secret: {}", secret_name);
@@ -112,14 +109,14 @@ impl SecretManagerProvider for AwsSecretManager {
                 .send()
                 .await
                 .context("Failed to create AWS secret")?;
-            
+
             metrics::record_secret_operation("aws", "create", start.elapsed().as_secs_f64());
             return Ok(true);
         }
-        
+
         // Get current secret value
         let current_value = self.get_secret_value(secret_name).await?;
-        
+
         if let Some(current) = current_value {
             if current == secret_value {
                 debug!("AWS secret {} unchanged, skipping update", secret_name);
@@ -127,7 +124,7 @@ impl SecretManagerProvider for AwsSecretManager {
                 return Ok(false);
             }
         }
-        
+
         // Update secret (creates new version automatically)
         info!("Updating AWS secret: {}", secret_name);
         self.client
@@ -137,13 +134,14 @@ impl SecretManagerProvider for AwsSecretManager {
             .send()
             .await
             .context("Failed to update AWS secret")?;
-        
+
         metrics::record_secret_operation("aws", "update", start.elapsed().as_secs_f64());
         Ok(true)
     }
 
     async fn get_secret_value(&self, secret_name: &str) -> Result<Option<String>> {
-        match self.client
+        match self
+            .client
             .get_secret_value()
             .secret_id(secret_name)
             .send()
@@ -157,7 +155,7 @@ impl SecretManagerProvider for AwsSecretManager {
                 } else {
                     None
                 };
-                
+
                 match value {
                     Some(v) => Ok(Some(v)),
                     None => Err(anyhow::anyhow!("Secret has no string or binary value")),
@@ -188,8 +186,7 @@ impl SecretManagerProvider for AwsSecretManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{AwsConfig, AwsAuthConfig};
+    use crate::{AwsAuthConfig, AwsConfig};
 
     #[test]
     fn test_aws_config_irsa() {
@@ -199,7 +196,7 @@ mod tests {
                 role_arn: "arn:aws:iam::123456789012:role/test-role".to_string(),
             }),
         };
-        
+
         assert_eq!(config.region, "us-east-1");
         match config.auth {
             Some(AwsAuthConfig::Irsa { role_arn }) => {
@@ -210,30 +207,12 @@ mod tests {
     }
 
     #[test]
-    fn test_aws_config_irsa() {
-        let config = AwsConfig {
-            region: "us-west-2".to_string(),
-            auth: Some(AwsAuthConfig::Irsa {
-                role_arn: "arn:aws:iam::123456789012:role/test-role".to_string(),
-            }),
-        };
-        
-        assert_eq!(config.region, "us-west-2");
-        match config.auth {
-            Some(AwsAuthConfig::Irsa { role_arn }) => {
-                assert_eq!(role_arn, "arn:aws:iam::123456789012:role/test-role");
-            }
-            _ => panic!("Expected Irsa auth config"),
-        }
-    }
-
-    #[test]
     fn test_aws_config_default() {
         let config = AwsConfig {
             region: "eu-west-1".to_string(),
             auth: None,
         };
-        
+
         assert_eq!(config.region, "eu-west-1");
         assert!(config.auth.is_none());
     }
@@ -249,9 +228,13 @@ mod tests {
             "my+secret=test",
             "my.secret@test",
         ];
-        
+
         for name in valid_names {
-            assert!(name.len() >= 1 && name.len() <= 512, "Secret name {} should be valid", name);
+            assert!(
+                name.len() >= 1 && name.len() <= 512,
+                "Secret name {} should be valid",
+                name
+            );
         }
     }
 }

@@ -7,9 +7,10 @@ ARG BUILDPLATFORM=linux/amd64
 FROM --platform=$BUILDPLATFORM rust:1.75-alpine AS builder
 
 # Install build dependencies
+# Note: musl-gcc is not needed when using cargo-zigbuild (zigbuild handles cross-compilation)
+# musl-dev is kept for any C dependencies that might need it
 RUN apk add --no-cache \
     musl-dev \
-    musl-gcc \
     git \
     curl \
     openssl-dev \

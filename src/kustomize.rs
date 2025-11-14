@@ -43,7 +43,7 @@ pub async fn extract_secrets_from_kustomize(
 ) -> Result<HashMap<String, String>> {
     // Construct full path to kustomization.yaml
     let full_path = artifact_path.join(kustomize_path);
-    
+
     if !full_path.exists() {
         return Err(anyhow::anyhow!(
             "Kustomize path does not exist: {}",
@@ -60,10 +60,7 @@ pub async fn extract_secrets_from_kustomize(
         ));
     }
 
-    info!(
-        "Running kustomize build on path: {}",
-        full_path.display()
-    );
+    info!("Running kustomize build on path: {}", full_path.display());
 
     // Run kustomize build
     let output = Command::new("kustomize")
@@ -76,14 +73,11 @@ pub async fn extract_secrets_from_kustomize(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         error!("Kustomize build failed: {}", stderr);
-        return Err(anyhow::anyhow!(
-            "Kustomize build failed: {}",
-            stderr
-        ));
+        return Err(anyhow::anyhow!("Kustomize build failed: {}", stderr));
     }
 
-    let yaml_output = String::from_utf8(output.stdout)
-        .context("Failed to decode kustomize output as UTF-8")?;
+    let yaml_output =
+        String::from_utf8(output.stdout).context("Failed to decode kustomize output as UTF-8")?;
 
     debug!("Kustomize build succeeded, parsing output...");
 
@@ -113,26 +107,21 @@ fn parse_kustomize_output(yaml_output: &str) -> Result<HashMap<String, String>> 
                 if let Some(data) = &secret.data {
                     for (key, value) in data.iter() {
                         // Decode base64 value
-                        use base64::{Engine as _, engine::general_purpose};
+                        use base64::{engine::general_purpose, Engine as _};
                         match general_purpose::STANDARD.decode(&value.0) {
-                            Ok(decoded) => {
-                                match String::from_utf8(decoded) {
-                                    Ok(secret_value) => {
-                                        all_secrets.insert(key.clone(), secret_value);
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "Failed to decode secret value for {} as UTF-8: {}",
-                                            key, e
-                                        );
-                                    }
+                            Ok(decoded) => match String::from_utf8(decoded) {
+                                Ok(secret_value) => {
+                                    all_secrets.insert(key.clone(), secret_value);
                                 }
-                            }
+                                Err(e) => {
+                                    warn!(
+                                        "Failed to decode secret value for {} as UTF-8: {}",
+                                        key, e
+                                    );
+                                }
+                            },
                             Err(e) => {
-                                warn!(
-                                    "Failed to decode base64 secret value for {}: {}",
-                                    key, e
-                                );
+                                warn!("Failed to decode base64 secret value for {}: {}", key, e);
                             }
                         }
                     }
@@ -157,7 +146,7 @@ pub async fn extract_properties_from_kustomize(
 
     // Construct full path to kustomization.yaml
     let full_path = artifact_path.join(kustomize_path);
-    
+
     if !full_path.exists() {
         return Err(anyhow::anyhow!(
             "Kustomize path does not exist: {}",
@@ -181,14 +170,11 @@ pub async fn extract_properties_from_kustomize(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         error!("Kustomize build failed: {}", stderr);
-        return Err(anyhow::anyhow!(
-            "Kustomize build failed: {}",
-            stderr
-        ));
+        return Err(anyhow::anyhow!("Kustomize build failed: {}", stderr));
     }
 
-    let yaml_output = String::from_utf8(output.stdout)
-        .context("Failed to decode kustomize output as UTF-8")?;
+    let yaml_output =
+        String::from_utf8(output.stdout).context("Failed to decode kustomize output as UTF-8")?;
 
     let mut all_properties = HashMap::new();
 
@@ -217,4 +203,3 @@ pub async fn extract_properties_from_kustomize(
 
     Ok(all_properties)
 }
-

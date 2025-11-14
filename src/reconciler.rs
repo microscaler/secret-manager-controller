@@ -20,28 +20,31 @@
 //! 5. Sync secrets to GCP Secret Manager
 //! 6. Update status
 
-use crate::{parser, metrics, SecretManagerConfig, SourceRef, SecretManagerConfigStatus, Condition, ProviderConfig};
-use crate::provider::SecretManagerProvider;
-use crate::gcp::SecretManagerClient as GcpSecretManagerClient;
 use crate::aws::AwsSecretManager;
 use crate::azure::AzureKeyVault;
-use kube_runtime::controller::Action;
+use crate::gcp::SecretManagerClient as GcpSecretManagerClient;
+use crate::provider::SecretManagerProvider;
+use crate::{
+    metrics, parser, Condition, ProviderConfig, SecretManagerConfig, SecretManagerConfigStatus,
+    SourceRef,
+};
 use anyhow::{Context, Result};
 use kube::Client;
+use kube_runtime::controller::Action;
+use md5;
 use std::path::PathBuf;
 use std::time::Instant;
 use thiserror::Error;
 use tracing::{error, info, warn};
-use md5;
 
 /// Construct secret name with prefix, key, and suffix
 /// Matches kustomize-google-secret-manager naming convention for drop-in replacement
-/// 
+///
 /// Format: {prefix}-{key}-{suffix} (if both prefix and suffix exist)
 ///         {prefix}-{key} (if only prefix exists)
 ///         {key}-{suffix} (if only suffix exists)
 ///         {key} (if neither exists)
-/// 
+///
 /// Invalid characters (`.`, `/`, etc.) are replaced with `_` to match GCP Secret Manager requirements
 #[cfg(test)]
 pub fn construct_secret_name(prefix: Option<&str>, key: &str, suffix: Option<&str>) -> String {
@@ -55,15 +58,15 @@ fn construct_secret_name(prefix: Option<&str>, key: &str, suffix: Option<&str>) 
 
 fn construct_secret_name_impl(prefix: Option<&str>, key: &str, suffix: Option<&str>) -> String {
     let mut parts = Vec::new();
-    
+
     if let Some(p) = prefix {
         if !p.is_empty() {
             parts.push(p);
         }
     }
-    
+
     parts.push(key);
-    
+
     if let Some(s) = suffix {
         if !s.is_empty() {
             // Strip leading dashes from suffix to avoid double dashes when joining
@@ -73,7 +76,7 @@ fn construct_secret_name_impl(prefix: Option<&str>, key: &str, suffix: Option<&s
             }
         }
     }
-    
+
     let name = parts.join("-");
     sanitize_secret_name(&name)
 }
@@ -92,7 +95,8 @@ fn sanitize_secret_name(name: &str) -> String {
 }
 
 fn sanitize_secret_name_impl(name: &str) -> String {
-    let sanitized: String = name.chars()
+    let sanitized: String = name
+        .chars()
         .map(|c| match c {
             // GCP Secret Manager allows: [a-zA-Z0-9_-]+
             // Replace common invalid characters with underscore
@@ -103,12 +107,12 @@ fn sanitize_secret_name_impl(name: &str) -> String {
             _ => '_',
         })
         .collect();
-    
+
     // Remove consecutive dashes (double dashes, triple dashes, etc.)
     // This handles cases where sanitization creates multiple dashes in a row
     let mut result = String::with_capacity(sanitized.len());
     let mut prev_was_dash = false;
-    
+
     for c in sanitized.chars() {
         if c == '-' {
             if !prev_was_dash {
@@ -120,7 +124,7 @@ fn sanitize_secret_name_impl(name: &str) -> String {
             prev_was_dash = false;
         }
     }
-    
+
     // Remove leading and trailing dashes
     result.trim_matches('-').to_string()
 }
@@ -143,10 +147,10 @@ impl Reconciler {
     pub async fn new(client: Client) -> Result<Self> {
         // Provider is created per-reconciliation based on provider config
         // Per-resource auth config is handled in reconcile()
-        
+
         // Load SOPS private key from Kubernetes secret
         let sops_private_key = Self::load_sops_private_key(&client).await?;
-        
+
         Ok(Self {
             client,
             sops_private_key,
@@ -156,32 +160,34 @@ impl Reconciler {
     /// Load SOPS private key from Kubernetes secret in controller namespace
     /// Defaults to microscaler-system namespace
     async fn load_sops_private_key(client: &Client) -> Result<Option<String>> {
-        use kube::Api;
         use k8s_openapi::api::core::v1::Secret;
-        
+        use kube::Api;
+
         // Use controller namespace (defaults to microscaler-system)
         // Can be overridden via POD_NAMESPACE environment variable
-        let namespace = std::env::var("POD_NAMESPACE")
-            .unwrap_or_else(|_| "microscaler-system".to_string());
-        
+        let namespace =
+            std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "microscaler-system".to_string());
+
         let secrets: Api<Secret> = Api::namespaced(client.clone(), &namespace);
-        
+
         // Try to get the SOPS private key secret
         // Expected secret name: sops-private-key (or similar)
         let secret_names = vec!["sops-private-key", "sops-gpg-key", "gpg-key"];
-        
+
         for secret_name in secret_names {
             match secrets.get(secret_name).await {
                 Ok(secret) => {
                     // Extract private key from secret data
                     // The key might be in different fields: "private-key", "key", "gpg-key", etc.
                     if let Some(ref data_map) = secret.data {
-                        if let Some(data) = data_map.get("private-key")
+                        if let Some(data) = data_map
+                            .get("private-key")
                             .or_else(|| data_map.get("key"))
                             .or_else(|| data_map.get("gpg-key"))
                         {
-                            let key = String::from_utf8(data.0.clone())
-                                .map_err(|e| anyhow::anyhow!("Failed to decode private key: {}", e))?;
+                            let key = String::from_utf8(data.0.clone()).map_err(|e| {
+                                anyhow::anyhow!("Failed to decode private key: {}", e)
+                            })?;
                             info!("Loaded SOPS private key from secret: {}", secret_name);
                             return Ok(Some(key));
                         }
@@ -195,8 +201,11 @@ impl Reconciler {
                 }
             }
         }
-        
-        warn!("SOPS private key not found in {} namespace, SOPS decryption will be disabled", namespace);
+
+        warn!(
+            "SOPS private key not found in {} namespace, SOPS decryption will be disabled",
+            namespace
+        );
         Ok(None)
     }
 
@@ -206,7 +215,7 @@ impl Reconciler {
     ) -> Result<Action, ReconcilerError> {
         let start = Instant::now();
         let name = config.metadata.name.as_deref().unwrap_or("unknown");
-        
+
         // Check if this is a manual reconciliation trigger (via annotation)
         let is_manual_trigger = config
             .metadata
@@ -214,13 +223,16 @@ impl Reconciler {
             .as_ref()
             .and_then(|ann| ann.get("secret-management.microscaler.io/reconcile"))
             .is_some();
-        
+
         if is_manual_trigger {
-            info!("Manual reconciliation triggered for SecretManagerConfig: {} (via msmctl CLI)", name);
+            info!(
+                "Manual reconciliation triggered for SecretManagerConfig: {} (via msmctl CLI)",
+                name
+            );
         } else {
             info!("Reconciling SecretManagerConfig: {}", name);
         }
-        
+
         metrics::increment_reconciliations();
 
         // Get source and artifact path based on source type
@@ -279,7 +291,8 @@ impl Reconciler {
                 error!("Unsupported source kind: {}", config.spec.source_ref.kind);
                 metrics::increment_reconciliation_errors();
                 return Err(ReconcilerError::ReconciliationFailed(
-                    anyhow::anyhow!("Unsupported source kind: {}", config.spec.source_ref.kind).into()
+                    anyhow::anyhow!("Unsupported source kind: {}", config.spec.source_ref.kind)
+                        .into(),
                 ));
             }
         };
@@ -289,41 +302,50 @@ impl Reconciler {
             ProviderConfig::Gcp(gcp_config) => {
                 // Determine authentication method from config
                 // Default to Workload Identity when auth is not specified
-                let (auth_type, service_account_email_owned) = if let Some(ref auth_config) = gcp_config.auth {
-                    let auth_json = serde_json::to_value(auth_config)
-                        .context("Failed to serialize gcpAuth config")?;
-                    let auth_type_str = auth_json.get("authType").and_then(|t| t.as_str());
-                    match auth_type_str {
-                        Some("WorkloadIdentity") => {
-                            let email = auth_json.get("serviceAccountEmail")
-                                .and_then(|e| e.as_str())
-                                .context("WorkloadIdentity requires serviceAccountEmail")?
-                                .to_string();
-                            (Some("WorkloadIdentity"), Some(email))
+                let (auth_type, service_account_email_owned) =
+                    if let Some(ref auth_config) = gcp_config.auth {
+                        let auth_json = serde_json::to_value(auth_config)
+                            .context("Failed to serialize gcpAuth config")?;
+                        let auth_type_str = auth_json.get("authType").and_then(|t| t.as_str());
+                        match auth_type_str {
+                            Some("WorkloadIdentity") => {
+                                let email = auth_json
+                                    .get("serviceAccountEmail")
+                                    .and_then(|e| e.as_str())
+                                    .context("WorkloadIdentity requires serviceAccountEmail")?
+                                    .to_string();
+                                (Some("WorkloadIdentity"), Some(email))
+                            }
+                            _ => {
+                                // Default to Workload Identity
+                                info!("No auth type specified, defaulting to Workload Identity");
+                                (Some("WorkloadIdentity"), None)
+                            }
                         }
-                        _ => {
-                            // Default to Workload Identity
-                            info!("No auth type specified, defaulting to Workload Identity");
-                            (Some("WorkloadIdentity"), None)
-                        }
-                    }
-                } else {
-                    // Default to Workload Identity when auth is not specified
-                    info!("No auth configuration specified, defaulting to Workload Identity");
-                    (Some("WorkloadIdentity"), None)
-                };
-                
+                    } else {
+                        // Default to Workload Identity when auth is not specified
+                        info!("No auth configuration specified, defaulting to Workload Identity");
+                        (Some("WorkloadIdentity"), None)
+                    };
+
                 let service_account_email = service_account_email_owned.as_deref();
-                let gcp_client = GcpSecretManagerClient::new(gcp_config.project_id.clone(), auth_type, service_account_email).await?;
+                let gcp_client = GcpSecretManagerClient::new(
+                    gcp_config.project_id.clone(),
+                    auth_type,
+                    service_account_email,
+                )
+                .await?;
                 Box::new(gcp_client)
             }
             ProviderConfig::Aws(aws_config) => {
-                let aws_provider = AwsSecretManager::new(aws_config, &ctx.client).await
+                let aws_provider = AwsSecretManager::new(aws_config, &ctx.client)
+                    .await
                     .context("Failed to create AWS Secrets Manager client")?;
                 Box::new(aws_provider)
             }
             ProviderConfig::Azure(azure_config) => {
-                let azure_provider = AzureKeyVault::new(azure_config, &ctx.client).await
+                let azure_provider = AzureKeyVault::new(azure_config, &ctx.client)
+                    .await
                     .context("Failed to create Azure Key Vault client")?;
                 Box::new(azure_provider)
             }
@@ -336,11 +358,16 @@ impl Reconciler {
             // Use kustomize build to extract secrets from generated Secret resources
             // This supports overlays, patches, and generators
             info!("Using kustomize build mode on path: {}", kustomize_path);
-            
-            match crate::kustomize::extract_secrets_from_kustomize(&artifact_path, kustomize_path).await {
+
+            match crate::kustomize::extract_secrets_from_kustomize(&artifact_path, kustomize_path)
+                .await
+            {
                 Ok(secrets) => {
                     let secret_prefix = config.spec.secrets.prefix.as_deref().unwrap_or("default");
-                    match ctx.process_kustomize_secrets(&*provider, &config, &secrets, secret_prefix).await {
+                    match ctx
+                        .process_kustomize_secrets(&*provider, &config, &secrets, secret_prefix)
+                        .await
+                    {
                         Ok(count) => {
                             secrets_synced += count;
                             info!("Synced {} secrets from kustomize build", count);
@@ -361,7 +388,7 @@ impl Reconciler {
         } else {
             // Use raw file mode - read application.secrets.env files directly
             info!("Using raw file mode");
-            
+
             // Find application files for the specified environment
             // Pass secret_prefix as default_service_name for single service deployments
             let default_service_name = config.spec.secrets.prefix.as_deref();
@@ -375,21 +402,23 @@ impl Reconciler {
             {
                 Ok(files) => files,
                 Err(e) => {
-                    error!("Failed to find application files for environment '{}': {}", 
-                        config.spec.secrets.environment, e);
+                    error!(
+                        "Failed to find application files for environment '{}': {}",
+                        config.spec.secrets.environment, e
+                    );
                     metrics::increment_reconciliation_errors();
                     return Err(ReconcilerError::ReconciliationFailed(e.into()));
                 }
             };
 
-            info!(
-                "Found {} application file sets",
-                application_files.len()
-            );
+            info!("Found {} application file sets", application_files.len());
 
             // Process each application file set
             for app_files in application_files {
-                match ctx.process_application_files(&*provider, &config, &app_files).await {
+                match ctx
+                    .process_application_files(&*provider, &config, &app_files)
+                    .await
+                {
                     Ok(count) => {
                         secrets_synced += count;
                         info!("Synced {} secrets for {}", count, app_files.service_name);
@@ -412,32 +441,33 @@ impl Reconciler {
         metrics::observe_reconciliation_duration(start.elapsed().as_secs_f64());
         metrics::set_secrets_managed(secrets_synced as i64);
 
-        info!("Reconciliation complete for {} (synced {} secrets)", name, secrets_synced);
+        info!(
+            "Reconciliation complete for {} (synced {} secrets)",
+            name, secrets_synced
+        );
         Ok(Action::await_change())
     }
 
     /// Get FluxCD GitRepository resource
-    async fn get_flux_git_repository(
-        &self,
-        source_ref: &SourceRef,
-    ) -> Result<serde_json::Value> {
+    async fn get_flux_git_repository(&self, source_ref: &SourceRef) -> Result<serde_json::Value> {
         // Use Kubernetes API to get GitRepository
         // GitRepository is a CRD from source.toolkit.fluxcd.io/v1beta2
-        use kube::core::DynamicObject;
         use kube::api::ApiResource;
-        
+        use kube::core::DynamicObject;
+
         let ar = ApiResource::from_gvk(&kube::core::GroupVersionKind {
             group: "source.toolkit.fluxcd.io".to_string(),
             version: "v1beta2".to_string(),
             kind: "GitRepository".to_string(),
         });
 
-        let api: kube::Api<DynamicObject> = kube::Api::namespaced_with(self.client.clone(), &source_ref.namespace, &ar);
+        let api: kube::Api<DynamicObject> =
+            kube::Api::namespaced_with(self.client.clone(), &source_ref.namespace, &ar);
 
-        let git_repo = api
-            .get(&source_ref.name)
-            .await
-            .context(format!("Failed to get FluxCD GitRepository: {}/{}", source_ref.namespace, source_ref.name))?;
+        let git_repo = api.get(&source_ref.name).await.context(format!(
+            "Failed to get FluxCD GitRepository: {}/{}",
+            source_ref.namespace, source_ref.name
+        ))?;
 
         Ok(serde_json::to_value(git_repo)?)
     }
@@ -481,13 +511,10 @@ impl Reconciler {
 
     /// Get artifact path from ArgoCD Application
     /// Clones the Git repository directly from the Application spec
-    async fn get_argocd_artifact_path(
-        &self,
-        source_ref: &SourceRef,
-    ) -> Result<PathBuf> {
-        use kube::core::DynamicObject;
+    async fn get_argocd_artifact_path(&self, source_ref: &SourceRef) -> Result<PathBuf> {
         use kube::api::ApiResource;
-        
+        use kube::core::DynamicObject;
+
         // Get ArgoCD Application CRD
         // Application is from argoproj.io/v1alpha1
         let ar = ApiResource::from_gvk(&kube::core::GroupVersionKind {
@@ -496,12 +523,13 @@ impl Reconciler {
             kind: "Application".to_string(),
         });
 
-        let api: kube::Api<DynamicObject> = kube::Api::namespaced_with(self.client.clone(), &source_ref.namespace, &ar);
+        let api: kube::Api<DynamicObject> =
+            kube::Api::namespaced_with(self.client.clone(), &source_ref.namespace, &ar);
 
-        let app = api
-            .get(&source_ref.name)
-            .await
-            .context(format!("Failed to get ArgoCD Application: {}/{}", source_ref.namespace, source_ref.name))?;
+        let app = api.get(&source_ref.name).await.context(format!(
+            "Failed to get ArgoCD Application: {}/{}",
+            source_ref.namespace, source_ref.name
+        ))?;
 
         // Extract Git source from Application spec
         let spec = app
@@ -530,7 +558,13 @@ impl Reconciler {
 
         // Clone repository to temporary directory
         // Use a deterministic path based on Application name/namespace/revision for caching
-        let repo_hash = format!("{:x}", md5::compute(format!("{}-{}-{}", source_ref.namespace, source_ref.name, target_revision)));
+        let repo_hash = format!(
+            "{:x}",
+            md5::compute(format!(
+                "{}-{}-{}",
+                source_ref.namespace, source_ref.name, target_revision
+            ))
+        );
         let clone_path = format!("/tmp/argocd-repo-{}", repo_hash);
         let path_buf = PathBuf::from(&clone_path);
 
@@ -547,10 +581,11 @@ impl Reconciler {
                     .arg("HEAD")
                     .output()
                     .await;
-                
+
                 if let Ok(output) = output {
                     if output.status.success() {
-                        let current_rev = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        let current_rev =
+                            String::from_utf8_lossy(&output.stdout).trim().to_string();
                         // Try to resolve target revision
                         let target_output = tokio::process::Command::new("git")
                             .arg("-C")
@@ -559,12 +594,17 @@ impl Reconciler {
                             .arg(target_revision)
                             .output()
                             .await;
-                        
+
                         if let Ok(target_output) = target_output {
                             if target_output.status.success() {
-                                let target_rev = String::from_utf8_lossy(&target_output.stdout).trim().to_string();
+                                let target_rev = String::from_utf8_lossy(&target_output.stdout)
+                                    .trim()
+                                    .to_string();
                                 if current_rev == target_rev {
-                                    info!("Using cached ArgoCD repository at {} (revision: {})", clone_path, target_revision);
+                                    info!(
+                                        "Using cached ArgoCD repository at {} (revision: {})",
+                                        clone_path, target_revision
+                                    );
                                     return Ok(path_buf);
                                 }
                             }
@@ -579,11 +619,14 @@ impl Reconciler {
         }
 
         // Clone the repository using git command
-        info!("Cloning ArgoCD repository: {} (revision: {})", repo_url, target_revision);
-        
+        info!(
+            "Cloning ArgoCD repository: {} (revision: {})",
+            repo_url, target_revision
+        );
+
         // Create parent directory
         tokio::fs::create_dir_all(&path_buf.parent().unwrap()).await?;
-        
+
         // Clone repository (shallow clone for efficiency)
         // First try shallow clone with branch (works for branch/tag names)
         let clone_output = tokio::process::Command::new("git")
@@ -604,7 +647,7 @@ impl Reconciler {
             let clone_output = tokio::process::Command::new("git")
                 .arg("clone")
                 .arg("--depth")
-                .arg("50")  // Deeper clone to ensure revision is available
+                .arg("50") // Deeper clone to ensure revision is available
                 .arg(repo_url)
                 .arg(&clone_path)
                 .output()
@@ -640,7 +683,10 @@ impl Reconciler {
                 .arg(target_revision)
                 .output()
                 .await
-                .context(format!("Failed to checkout revision {} in repository {}", target_revision, repo_url))?;
+                .context(format!(
+                    "Failed to checkout revision {} in repository {}",
+                    target_revision, repo_url
+                ))?;
 
             if !checkout_output.status.success() {
                 let error_msg = String::from_utf8_lossy(&checkout_output.stderr);
@@ -653,7 +699,10 @@ impl Reconciler {
             }
         }
 
-        info!("Successfully cloned ArgoCD repository to {} (revision: {})", clone_path, target_revision);
+        info!(
+            "Successfully cloned ArgoCD repository to {} (revision: {})",
+            clone_path, target_revision
+        );
         Ok(path_buf)
     }
 
@@ -677,25 +726,22 @@ impl Reconciler {
         // Store secrets in cloud provider (GitOps: Git is source of truth)
         let mut count = 0;
         let mut updated_count = 0;
-        
+
         for (key, value) in secrets {
             let secret_name = construct_secret_name(
                 Some(secret_prefix),
                 key.as_str(),
                 config.spec.secrets.suffix.as_deref(),
             );
-            match provider
-                .create_or_update_secret(
-                    &secret_name,
-                    &value,
-                )
-                .await
-            {
+            match provider.create_or_update_secret(&secret_name, &value).await {
                 Ok(was_updated) => {
                     count += 1;
                     if was_updated {
                         updated_count += 1;
-                        info!("Updated secret {} from git (GitOps source of truth)", secret_name);
+                        info!(
+                            "Updated secret {} from git (GitOps source of truth)",
+                            secret_name
+                        );
                     }
                 }
                 Err(e) => {
@@ -704,7 +750,7 @@ impl Reconciler {
                 }
             }
         }
-        
+
         if updated_count > 0 {
             metrics::increment_secrets_updated(updated_count as i64);
             warn!(
@@ -722,10 +768,7 @@ impl Reconciler {
                 config.spec.secrets.suffix.as_deref(),
             );
             match provider
-                .create_or_update_secret(
-                    &secret_name,
-                    &properties_json,
-                )
+                .create_or_update_secret(&secret_name, &properties_json)
                 .await
             {
                 Ok(was_updated) => {
@@ -756,25 +799,22 @@ impl Reconciler {
         // Store secrets in cloud provider (GitOps: Git is source of truth)
         let mut count = 0;
         let mut updated_count = 0;
-        
+
         for (key, value) in secrets {
             let secret_name = construct_secret_name(
                 Some(secret_prefix),
                 key.as_str(),
                 config.spec.secrets.suffix.as_deref(),
             );
-            match provider
-                .create_or_update_secret(
-                    &secret_name,
-                    value,
-                )
-                .await
-            {
+            match provider.create_or_update_secret(&secret_name, value).await {
                 Ok(was_updated) => {
                     count += 1;
                     if was_updated {
                         updated_count += 1;
-                        info!("Updated secret {} from kustomize build (GitOps source of truth)", secret_name);
+                        info!(
+                            "Updated secret {} from kustomize build (GitOps source of truth)",
+                            secret_name
+                        );
                     }
                 }
                 Err(e) => {
@@ -783,7 +823,7 @@ impl Reconciler {
                 }
             }
         }
-        
+
         if updated_count > 0 {
             metrics::increment_secrets_updated(updated_count as i64);
             warn!(
@@ -796,15 +836,13 @@ impl Reconciler {
         Ok(count)
     }
 
-    async fn update_status(
-        &self,
-        config: &SecretManagerConfig,
-        secrets_synced: i32,
-    ) -> Result<()> {
+    async fn update_status(&self, config: &SecretManagerConfig, secrets_synced: i32) -> Result<()> {
         use kube::api::PatchParams;
 
-        let api: kube::Api<SecretManagerConfig> =
-            kube::Api::namespaced(self.client.clone(), config.metadata.namespace.as_deref().unwrap_or("default"));
+        let api: kube::Api<SecretManagerConfig> = kube::Api::namespaced(
+            self.client.clone(),
+            config.metadata.namespace.as_deref().unwrap_or("default"),
+        );
 
         let status = SecretManagerConfigStatus {
             conditions: vec![Condition {
@@ -937,9 +975,15 @@ mod tests {
         fn test_construct_secret_name_edge_cases() {
             // Test edge cases
             assert_eq!(construct_secret_name(None, "", None), "");
-            assert_eq!(construct_secret_name(Some("prefix"), "", Some("suffix")), "prefix-suffix"); // Empty key becomes empty string after trim
+            assert_eq!(
+                construct_secret_name(Some("prefix"), "", Some("suffix")),
+                "prefix-suffix"
+            ); // Empty key becomes empty string after trim
             assert_eq!(construct_secret_name(Some("a"), "b", Some("c")), "a-b-c");
-            assert_eq!(construct_secret_name(Some("prefix"), "key", Some("---suffix")), "prefix-key-suffix"); // Multiple leading dashes stripped
+            assert_eq!(
+                construct_secret_name(Some("prefix"), "key", Some("---suffix")),
+                "prefix-key-suffix"
+            ); // Multiple leading dashes stripped
         }
 
         #[test]
@@ -954,4 +998,3 @@ mod tests {
         }
     }
 }
-

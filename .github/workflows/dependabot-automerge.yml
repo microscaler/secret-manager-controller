@@ -28,10 +28,10 @@ jobs:
               pull_number: context.issue.number,
             });
 
-            // Match job names from test.yml
+            // Match job names from ci.yml
             // GitHub Actions uses the job 'name' field for status checks
             const requiredStatusChecks = [
-              'Test Secret Manager Controller',  // test job name
+              'Run Unit Tests',  // test job name
               'Lint Secret Manager Controller', // lint job name
             ];
 
