@@ -51,6 +51,8 @@ pub struct SecretManagerConfigSpec {
     pub base_path: Option<String>,
     #[serde(default)]
     pub secret_prefix: Option<String>,
+    #[serde(default)]
+    pub secret_suffix: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

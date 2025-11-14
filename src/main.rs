@@ -31,7 +31,7 @@ use futures::StreamExt;
 use kube::{
     api::{Api, ListParams, Patch, PatchParams},
     core::CustomResourceExt,
-    Client, CustomResource, Resource,
+    Client, CustomResource,
 };
 use kube_runtime::{
     watcher, Controller,
@@ -108,8 +108,14 @@ pub struct SecretManagerConfigSpec {
     #[serde(default)]
     pub base_path: Option<String>,
     /// Secret name prefix (default: repository name)
+    /// Matches kustomize-google-secret-manager prefix behavior
     #[serde(default)]
     pub secret_prefix: Option<String>,
+    /// Secret name suffix (optional)
+    /// Matches kustomize-google-secret-manager suffix behavior
+    /// Common use cases: environment identifiers, tags, etc.
+    #[serde(default)]
+    pub secret_suffix: Option<String>,
 }
 
 /// Source reference for GitOps repositories

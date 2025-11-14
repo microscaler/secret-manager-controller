@@ -274,13 +274,22 @@ deployment-configuration/
 
 ## Secret Naming Convention
 
-Secrets in GCP Secret Manager follow this naming pattern:
-- `{secretPrefix}-{key}` for individual secrets from `.env` files
-- `{secretPrefix}-properties` for all properties as JSON
+Secrets in GCP Secret Manager follow the same naming pattern as `kustomize-google-secret-manager` for drop-in replacement compatibility:
+
+- `{secretPrefix}-{key}-{secretSuffix}` if both prefix and suffix are specified
+- `{secretPrefix}-{key}` if only prefix is specified
+- `{key}-{secretSuffix}` if only suffix is specified
+- `{key}` if neither is specified
+
+Invalid characters (`.`, `/`, spaces) are automatically sanitized to `_` to comply with GCP Secret Manager requirements.
 
 Where `secretPrefix` is either:
 - The value specified in `spec.secretPrefix`
 - Or derived from the service name in the path (e.g., `idam`)
+
+And `secretSuffix` is:
+- The value specified in `spec.secretSuffix` (optional)
+- Commonly used for environment identifiers (e.g., `-prod`, `-dev-cf`) or tags (e.g., `-be-gcw1`)
 
 ## Verification
 

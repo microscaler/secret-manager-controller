@@ -61,6 +61,7 @@ spec:
   # Option 2: Raw File Mode (if kustomizePath not specified)
   # basePath: microservices  # Optional - if omitted, searches from repository root
   secretPrefix: my-service  # Optional, defaults to service name
+  secretSuffix: -prod       # Optional, matches kustomize-google-secret-manager behavior
 ```
 
 **Important:** 
@@ -84,14 +85,19 @@ microservices/
 
 ## Secret Naming
 
-Secrets in GCP Secret Manager are named:
-- `{secretPrefix}-{key}` for individual secrets from `.env` or `.yaml`
-- `{secretPrefix}-properties` for all properties as JSON
+Secrets in GCP Secret Manager are named using the same convention as `kustomize-google-secret-manager` for drop-in replacement compatibility:
 
-Example:
-- `my-service-database-url`
-- `my-service-api-key`
-- `my-service-properties`
+- `{secretPrefix}-{key}-{secretSuffix}` if both prefix and suffix are specified
+- `{secretPrefix}-{key}` if only prefix is specified
+- `{key}-{secretSuffix}` if only suffix is specified
+- `{key}` if neither is specified
+
+Invalid characters (`.`, `/`, spaces) are automatically replaced with `_` to comply with GCP Secret Manager naming requirements.
+
+Examples:
+- With prefix only: `my-service-database-url`, `my-service-api-key`
+- With prefix and suffix: `my-service-database-url-prod`, `my-service-api-key-prod`
+- Properties secret: `my-service-properties` or `my-service-properties-prod`
 
 ## Usage with CloudRun
 
@@ -253,6 +259,255 @@ The controller uses a `ClusterRole` to watch resources across all namespaces:
 - Controller deploys to `flux-system` namespace
 - `SecretManagerConfig` resources can be deployed in **any namespace**
 - Controller automatically watches and reconciles resources in all namespaces
+
+## MSMCTL CLI
+
+`msmctl` (Microscaler Secret Manager Controller) is a command-line tool for interacting with the Secret Manager Controller running in Kubernetes. Similar to `fluxctl`, it provides commands to trigger reconciliations and view the status of SecretManagerConfig resources.
+
+### Installation
+
+#### Build from Source
+
+```bash
+cd hack/controllers/secret-manager-controller
+cargo build --release --bin msmctl
+```
+
+The binary will be available at `target/release/msmctl`.
+
+#### Prerequisites
+
+- Kubernetes cluster with Secret Manager Controller deployed
+- `kubectl` configured with access to the cluster
+- RBAC permissions to read/update SecretManagerConfig resources
+
+### Authentication
+
+`msmctl` uses Kubernetes authentication primitives:
+
+- **kubeconfig**: Uses the default kubeconfig (`~/.kube/config`) or `KUBECONFIG` environment variable
+- **Service Account**: When running in-cluster, uses the pod's service account token
+- **Client Certificates**: Supports client certificate authentication from kubeconfig
+
+No additional authentication is required - `msmctl` leverages Kubernetes' built-in security mechanisms.
+
+### Commands
+
+#### `msmctl reconcile`
+
+Trigger a manual reconciliation for a SecretManagerConfig resource.
+
+**Usage:**
+```bash
+msmctl reconcile --name <name> [--namespace <namespace>]
+```
+
+**Options:**
+- `--name, -n`: Name of the SecretManagerConfig resource (required)
+- `--namespace, -N`: Namespace of the resource (defaults to "default")
+
+**Example:**
+```bash
+# Trigger reconciliation in default namespace
+msmctl reconcile --name idam-dev-secrets
+
+# Trigger reconciliation in specific namespace
+msmctl reconcile --name idam-dev-secrets --namespace pricewhisperer
+```
+
+**How it works:**
+- Updates the `secret-management.microscaler.io/reconcile` annotation with a timestamp
+- The controller watches for annotation changes and triggers reconciliation
+- This is a Kubernetes-native approach that doesn't require HTTP endpoints
+
+#### `msmctl list`
+
+List all SecretManagerConfig resources.
+
+**Usage:**
+```bash
+msmctl list [--namespace <namespace>]
+```
+
+**Options:**
+- `--namespace, -N`: Namespace to list resources in (defaults to all namespaces)
+
+**Example:**
+```bash
+# List all resources in all namespaces
+msmctl list
+
+# List resources in specific namespace
+msmctl list --namespace pricewhisperer
+```
+
+**Output:**
+```
+NAME                          NAMESPACE            READY           SECRETS SYNCED
+idam-dev-secrets             pricewhisperer       True            5
+idam-prd-secrets             pricewhisperer       True            5
+```
+
+#### `msmctl status`
+
+Show detailed status of a SecretManagerConfig resource.
+
+**Usage:**
+```bash
+msmctl status --name <name> [--namespace <namespace>]
+```
+
+**Options:**
+- `--name, -n`: Name of the SecretManagerConfig resource (required)
+- `--namespace, -N`: Namespace of the resource (defaults to "default")
+
+**Example:**
+```bash
+msmctl status --name idam-dev-secrets --namespace pricewhisperer
+```
+
+**Output:**
+```
+Status for SecretManagerConfig 'pricewhisperer/idam-dev-secrets':
+
+Metadata:
+  Name: idam-dev-secrets
+  Namespace: pricewhisperer
+  Generation: 1
+
+Spec:
+  GCP Project ID: pricewhisperer-dev
+  Environment: dev
+  Source: GitRepository/pricewhisperer-manifests
+  Kustomize Path: microservices/idam/deployment-configuration/profiles/dev
+  Secret Prefix: idam-dev
+  Secret Suffix: -prod
+
+Status:
+  Observed Generation: 1
+  Last Reconcile Time: 2024-01-15T10:30:00Z
+  Secrets Synced: 5
+
+Conditions:
+  Ready: True
+    Reason: ReconciliationSucceeded
+    Message: Synced 5 secrets
+    Last Transition: 2024-01-15T10:30:00Z
+```
+
+### Security
+
+#### RBAC Requirements
+
+The user/service account running `msmctl` needs the following permissions:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: msmctl-user
+rules:
+- apiGroups: ["secret-management.microscaler.io"]
+  resources: ["secretmanagerconfigs"]
+  verbs: ["get", "list", "patch"]
+- apiGroups: ["secret-management.microscaler.io"]
+  resources: ["secretmanagerconfigs/status"]
+  verbs: ["get"]
+```
+
+#### Authentication Methods
+
+1. **kubeconfig** (default): Uses credentials from `~/.kube/config`
+2. **Service Account**: When running in-cluster, automatically uses pod service account
+3. **Environment Variables**: Can use `KUBECONFIG` to specify custom config file
+
+### Comparison with fluxctl
+
+| Feature | fluxctl | msmctl |
+|---------|---------|--------|
+| **Trigger Reconciliation** | ✅ | ✅ |
+| **List Resources** | ✅ | ✅ |
+| **Show Status** | ✅ | ✅ |
+| **Authentication** | kubeconfig | kubeconfig |
+| **Method** | HTTP endpoint | Annotation-based |
+
+#### Advantages of Annotation-Based Approach
+
+- **Kubernetes-native**: Uses standard Kubernetes watch mechanisms
+- **No HTTP endpoint required**: Controller doesn't need to expose HTTP API
+- **Audit trail**: Annotation changes are logged in Kubernetes audit logs
+- **RBAC integration**: Uses standard Kubernetes RBAC for authorization
+
+### Troubleshooting
+
+#### "Failed to create Kubernetes client"
+
+**Cause:** kubeconfig not configured or invalid
+
+**Solution:**
+```bash
+# Verify kubeconfig
+kubectl cluster-info
+
+# Set KUBECONFIG if needed
+export KUBECONFIG=/path/to/kubeconfig
+```
+
+#### "Failed to trigger reconciliation"
+
+**Cause:** Insufficient RBAC permissions
+
+**Solution:** Ensure your user/service account has `patch` permission on SecretManagerConfig resources.
+
+#### "Resource not found"
+
+**Cause:** SecretManagerConfig doesn't exist or wrong namespace
+
+**Solution:**
+```bash
+# List resources to verify name and namespace
+msmctl list
+
+# Use correct namespace
+msmctl reconcile --name <name> --namespace <correct-namespace>
+```
+
+### Examples
+
+#### CI/CD Integration
+
+Trigger reconciliation after deploying secrets:
+
+```bash
+#!/bin/bash
+# deploy-secrets.sh
+
+# Apply SecretManagerConfig
+kubectl apply -f secret-manager-config.yaml
+
+# Trigger immediate reconciliation
+msmctl reconcile --name my-secrets --namespace default
+
+# Wait for reconciliation to complete
+kubectl wait --for=condition=Ready \
+  secretmanagerconfig/my-secrets \
+  --timeout=60s
+```
+
+#### Monitoring Script
+
+Check status of all resources:
+
+```bash
+#!/bin/bash
+# check-status.sh
+
+for config in $(msmctl list --namespace pricewhisperer | awk 'NR>2 {print $1}'); do
+  echo "Checking $config..."
+  msmctl status --name "$config" --namespace pricewhisperer
+  echo ""
+done
+```
 
 ## Related Components
 

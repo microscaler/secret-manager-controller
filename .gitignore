@@ -1,1 +1,36 @@
+# Rust build artifacts
 target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+
+# Backup files
+*.backup
+*_backup_*
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+
+# GPG keys (never commit!)
+*.pem
+*.key
+*.gpg
+private-key*
+*.asc

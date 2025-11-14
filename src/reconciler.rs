@@ -30,6 +30,53 @@ use std::time::Instant;
 use thiserror::Error;
 use tracing::{error, info, warn};
 
+/// Construct secret name with prefix, key, and suffix
+/// Matches kustomize-google-secret-manager naming convention for drop-in replacement
+/// 
+/// Format: {prefix}-{key}-{suffix} (if both prefix and suffix exist)
+///         {prefix}-{key} (if only prefix exists)
+///         {key}-{suffix} (if only suffix exists)
+///         {key} (if neither exists)
+/// 
+/// Invalid characters (`.`, `/`, etc.) are replaced with `_` to match GCP Secret Manager requirements
+fn construct_secret_name(prefix: Option<&str>, key: &str, suffix: Option<&str>) -> String {
+    let mut parts = Vec::new();
+    
+    if let Some(p) = prefix {
+        if !p.is_empty() {
+            parts.push(p);
+        }
+    }
+    
+    parts.push(key);
+    
+    if let Some(s) = suffix {
+        if !s.is_empty() {
+            parts.push(s);
+        }
+    }
+    
+    let name = parts.join("-");
+    sanitize_secret_name(&name)
+}
+
+/// Sanitize secret name to comply with GCP Secret Manager naming requirements
+/// Replaces invalid characters (`.`, `/`, etc.) with `_`
+/// Matches kustomize-google-secret-manager character sanitization behavior
+fn sanitize_secret_name(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            // GCP Secret Manager allows: [a-zA-Z0-9_-]+
+            // Replace common invalid characters with underscore
+            '.' | '/' | ' ' => '_',
+            // Keep valid characters
+            c if c.is_alphanumeric() || c == '-' || c == '_' => c,
+            // Replace any other invalid character with underscore
+            _ => '_',
+        })
+        .collect()
+}
+
 #[derive(Debug, Error)]
 pub enum ReconcilerError {
     #[error("Reconciliation failed: {0}")]
@@ -105,7 +152,20 @@ impl Reconciler {
     ) -> Result<Action, ReconcilerError> {
         let start = Instant::now();
         let name = config.metadata.name.as_deref().unwrap_or("unknown");
-        info!("Reconciling SecretManagerConfig: {}", name);
+        
+        // Check if this is a manual reconciliation trigger (via annotation)
+        let is_manual_trigger = config
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|ann| ann.get("secret-management.microscaler.io/reconcile"))
+            .is_some();
+        
+        if is_manual_trigger {
+            info!("Manual reconciliation triggered for SecretManagerConfig: {} (via msmctl CLI)", name);
+        } else {
+            info!("Reconciling SecretManagerConfig: {}", name);
+        }
         
         metrics::increment_reconciliations();
 
@@ -430,7 +490,11 @@ impl Reconciler {
         let mut updated_count = 0;
         
         for (key, value) in secrets {
-            let secret_name = format!("{}-{}", secret_prefix, key);
+            let secret_name = construct_secret_name(
+                Some(secret_prefix),
+                key.as_str(),
+                config.spec.secret_suffix.as_deref(),
+            );
             match self.secret_manager
                 .create_or_update_secret(
                     &config.spec.gcp_project_id,
@@ -464,7 +528,11 @@ impl Reconciler {
         // Store properties as a single secret (JSON encoded)
         if !properties.is_empty() {
             let properties_json = serde_json::to_string(&properties)?;
-            let secret_name = format!("{}-properties", secret_prefix);
+            let secret_name = construct_secret_name(
+                Some(secret_prefix),
+                "properties",
+                config.spec.secret_suffix.as_deref(),
+            );
             match self.secret_manager
                 .create_or_update_secret(
                     &config.spec.gcp_project_id,
@@ -502,7 +570,11 @@ impl Reconciler {
         let mut updated_count = 0;
         
         for (key, value) in secrets {
-            let secret_name = format!("{}-{}", secret_prefix, key);
+            let secret_name = construct_secret_name(
+                Some(secret_prefix),
+                key.as_str(),
+                config.spec.secret_suffix.as_deref(),
+            );
             match self.secret_manager
                 .create_or_update_secret(
                     &config.spec.gcp_project_id,
