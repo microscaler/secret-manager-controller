@@ -20,7 +20,7 @@ env:
 jobs:
   # Step 1: Run linting checks
   lint:
-    name: Lint Secret Manager Controller
+    name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -48,6 +48,14 @@ jobs:
           key: ${{ runner.os }}-cargo-secret-manager-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-secret-manager-
+
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: |
+          cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run cargo audit
         continue-on-error: true
@@ -95,14 +103,6 @@ jobs:
           key: ${{ runner.os }}-cargo-secret-manager-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-secret-manager-
-
-      - name: Check formatting
-        run: |
-          cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: |
-          cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Build (native and musl targets)
         run: |
@@ -209,6 +209,37 @@ jobs:
           echo "image_ref=${{ needs.build-test-image.outputs.image-ref }}" >> $GITHUB_OUTPUT
           echo "✅ Using test image: ${{ needs.build-test-image.outputs.image-ref }}"
 
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-secret-manager-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-secret-manager-
+
+      - name: Generate CRD
+        run: |
+          # Generate CRD from latest code (cargo run will build if needed)
+          cargo run --bin crdgen --release > config/crd/secretmanagerconfig.yaml
+          echo "✅ CRD generated successfully"
+
+      - name: Verify CRD is valid YAML
+        run: |
+          # Check if CRD file exists and is valid YAML
+          if [ -f config/crd/secretmanagerconfig.yaml ]; then
+            # Use Python to validate YAML (available in GitHub Actions)
+            python3 -c "import yaml; yaml.safe_load(open('config/crd/secretmanagerconfig.yaml'))" || exit 1
+            echo "✅ CRD YAML is valid"
+          else
+            echo "⚠️  CRD file not found"
+            exit 1
+          fi
+
       - name: Deploy controller with test image
         run: |
           # Create namespace
@@ -278,19 +309,6 @@ jobs:
         run: |
           kubectl port-forward -n secret-manager-controller-pact-broker service/pact-broker 9292:9292 &
           sleep 5
-
-      - name: Cache cargo dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-secret-manager-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-secret-manager-
 
       - name: Run Pact contract tests
         env:
