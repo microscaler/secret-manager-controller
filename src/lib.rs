@@ -8,15 +8,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // Re-export modules so they can be tested
-pub mod aws;
-pub mod azure;
-pub mod gcp;
-pub mod kustomize;
-pub mod metrics;
-pub mod otel;
-pub mod parser;
+pub mod controller;
+pub mod observability;
 pub mod provider;
-pub mod reconciler;
 
 // Note: GcpAuthConfig is defined in main.rs since main.rs has its own CRD definition
 // For library usage, import from the main module

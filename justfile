@@ -47,7 +47,7 @@ dev-up:
     
     # Start Tilt
     echo "🎯 Starting Tilt..."
-    tilt up --file Tiltfile.k3s
+    tilt up
 
 
 # Stop development environment (K3s + Tilt)
@@ -82,16 +82,6 @@ build-release:
     @echo "🔨 Building Rust binary (release)..."
     @cargo build --release
 
-# Build Rust binary for Linux (musl target)
-# Uses host-aware-build.sh script (matches BRRTRouter pattern)
-build-linux:
-    @echo "🔨 Building Rust binary for Linux (musl)..."
-    @./scripts/host-aware-build.sh
-
-# Build Rust binary for Linux (musl target, release)
-build-linux-release:
-    @echo "🔨 Building Rust binary for Linux (musl, release)..."
-    @./scripts/host-aware-build.sh --release
 
 # Build Docker image (development)
 build-docker:

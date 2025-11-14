@@ -7,7 +7,7 @@
 //! - Retrieve secret values
 //! - Support IRSA (IAM Roles for Service Accounts) authentication
 
-use crate::metrics;
+use crate::observability::metrics;
 use crate::provider::SecretManagerProvider;
 use crate::{AwsAuthConfig, AwsConfig};
 use anyhow::{Context, Result};
@@ -25,6 +25,7 @@ pub struct AwsSecretManager {
 impl AwsSecretManager {
     /// Create a new AWS Secrets Manager client
     /// Supports both Access Keys and IRSA (IAM Roles for Service Accounts)
+    #[allow(clippy::missing_errors_doc)]
     pub async fn new(config: &AwsConfig, k8s_client: &kube::Client) -> Result<Self> {
         let region = config.region.clone();
 

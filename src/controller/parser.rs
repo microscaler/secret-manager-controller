@@ -55,7 +55,7 @@ fn normalize_base_path(base_path: Option<&str>) -> Option<&str> {
 /// Only processes the specified environment name - does not scan all environments
 ///
 /// If `base_path` is None, searches from repository root
-#[allow(clippy::unused_async)] // May be called from async contexts in the future
+#[allow(clippy::unused_async, clippy::missing_errors_doc)] // May be called from async contexts in the future
 pub async fn find_application_files(
     artifact_path: &Path,
     base_path: Option<&str>,
@@ -113,13 +113,11 @@ pub async fn find_application_files(
                     parent
                         .file_name()
                         .and_then(|n| n.to_str())
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| "unknown".to_string())
+                        .map_or_else(|| "unknown".to_string(), ToString::to_string)
                 }
             } else {
                 default_service_name
-                    .map(ToString::to_string)
-                    .unwrap_or("unknown".to_string())
+                    .map_or("unknown".to_string(), ToString::to_string)
             };
 
             // Look for profiles directory first (Skaffold-compliant structure)
@@ -217,6 +215,7 @@ impl ApplicationFiles {
 
 /// Parse secrets from application.secrets.env and application.secrets.yaml
 /// Supports SOPS-encrypted files
+#[allow(clippy::missing_errors_doc)]
 pub async fn parse_secrets(
     app_files: &ApplicationFiles,
     sops_private_key: Option<&str>,
@@ -241,6 +240,7 @@ pub async fn parse_secrets(
 }
 
 /// Parse properties from application.properties
+#[allow(clippy::missing_errors_doc)]
 pub async fn parse_properties(app_files: &ApplicationFiles) -> Result<HashMap<String, String>> {
     if let Some(ref path) = app_files.properties {
         debug!("Parsing properties from: {}", path.display());

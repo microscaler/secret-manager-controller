@@ -155,8 +155,36 @@ docker run -d \
     server \
     --disable traefik \
     --write-kubeconfig-mode 644 \
-    --tls-san localhost \
-    --private-registry "http://${REGISTRY_NAME}:5000"
+    --tls-san localhost
+
+# Configure registry access for k3s
+log_info "Configuring registry access..."
+# Create registries.yaml for k3s
+docker exec ${CONTAINER_NAME} sh -c 'mkdir -p /etc/rancher/k3s && cat > /etc/rancher/k3s/registries.yaml << EOF
+mirrors:
+  "localhost:5002":
+    endpoint:
+      - "http://secret-manager-controller-registry:5000"
+configs:
+  "localhost:5002":
+    tls:
+      insecure_skip_verify: true
+EOF
+' || log_warn "Failed to create registries.yaml (may need manual configuration)"
+
+# Create containerd hosts.toml for direct registry access (required for HTTP registry)
+log_info "Configuring containerd registry access..."
+docker exec ${CONTAINER_NAME} sh -c 'mkdir -p /var/lib/rancher/k3s/agent/etc/containerd/certs.d/localhost:5002 && cat > /var/lib/rancher/k3s/agent/etc/containerd/certs.d/localhost:5002/hosts.toml << EOF
+server = "http://secret-manager-controller-registry:5000"
+
+[host."http://secret-manager-controller-registry:5000"]
+  capabilities = ["pull", "resolve"]
+EOF
+' || log_warn "Failed to create containerd hosts.toml (may need manual configuration)"
+
+log_info "Restarting k3s to apply registry configuration..."
+docker restart ${CONTAINER_NAME} || log_warn "Failed to restart k3s (may need manual restart)"
+sleep 5
 
 # Wait for k3s to be ready
 log_info "Waiting for K3s to be ready..."

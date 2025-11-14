@@ -1,19 +1,19 @@
 # Development Dockerfile for Secret Manager Controller (Tilt)
 # Binary is cross-compiled on host (Apple Silicon -> x86_64 Linux) and copied in
-# This is the original Dockerfile optimized for Tilt development
+# This matches PriceWhisperer's pattern
 
 ARG TARGETPLATFORM=linux/amd64
-FROM --platform=${TARGETPLATFORM} alpine:3.19
+FROM --platform=${TARGETPLATFORM} debian:bookworm-slim
 
 # Install runtime dependencies
 # git: Required for ArgoCD support (cloning repositories)
 # kustomize: Required for Kustomize Build Mode
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libgcc \
     git \
-    curl && \
-    # Install kustomize directly (no bash needed - download binary instead of install script)
+    curl \
+    && rm -rf /var/lib/apt/lists/* && \
+    # Install kustomize
     KUSTOMIZE_VERSION=5.8.0 && \
     curl -L "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" | \
     tar -xz -C /usr/local/bin && \
@@ -22,11 +22,11 @@ RUN apk add --no-cache \
 # Create app directory with proper permissions for live updates
 WORKDIR /app
 
-# Copy pre-built binary from staging directory (x86_64 Linux musl target)
+# Copy pre-built binaries from build_artifacts (x86_64 Linux musl target)
 # Note: Binary must exist before Docker build (ensured by Tilt resource_deps)
-# Build context is the controller directory, so path is relative to that
-COPY ./target/x86_64-unknown-linux-musl/debug/secret-manager-controller /app/secret-manager-controller
-RUN chmod +x /app/secret-manager-controller
+COPY ./build_artifacts/secret-manager-controller /app/secret-manager-controller
+COPY ./build_artifacts/crdgen /usr/local/bin/crdgen
+RUN chmod +x /app/secret-manager-controller /usr/local/bin/crdgen
 
 # Create directories with write permissions for live updates
 RUN chmod -R 777 /app

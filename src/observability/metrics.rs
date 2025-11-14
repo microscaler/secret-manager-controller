@@ -90,6 +90,7 @@ static GCP_SECRET_MANAGER_OPERATION_DURATION: LazyLock<Histogram> = LazyLock::ne
     .unwrap()
 });
 
+#[allow(clippy::missing_errors_doc)]
 pub fn register_metrics() -> Result<()> {
     REGISTRY.register(Box::new(RECONCILIATIONS_TOTAL.clone()))?;
     REGISTRY.register(Box::new(RECONCILIATION_ERRORS_TOTAL.clone()))?;

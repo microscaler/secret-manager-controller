@@ -9,7 +9,7 @@
 //!
 //! Uses the official [`google-cloud-secretmanager-v1`] SDK for Rust.
 
-use crate::metrics;
+use crate::observability::metrics;
 use crate::provider::SecretManagerProvider;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -36,7 +36,7 @@ impl SecretManager {
     ///
     /// # Errors
     /// Returns an error if GCP client initialization fails
-    #[allow(clippy::missing_errors_doc)]
+    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
     pub async fn new(
         _project_id: String,
         _auth_type: Option<&str>,
@@ -75,6 +75,7 @@ impl SecretManager {
 
     /// Create or update secret, ensuring Git is source of truth
     /// If secret exists and value differs, creates new version and disables old versions
+    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
     async fn create_or_update_secret_impl(
         &self,
         _secret_name: &str,
@@ -88,14 +89,14 @@ impl SecretManager {
     }
 
     /// Get the latest secret version value
-    #[allow(dead_code)] // May be used in future implementations
+    #[allow(dead_code, clippy::missing_errors_doc, clippy::unused_async)] // May be used in future implementations
     async fn get_latest_secret_value(&self, _secret_name: &str) -> Result<String> {
         Err(anyhow::anyhow!(
             "Not implemented - waiting for correct SDK API"
         ))
     }
 
-    #[allow(dead_code)] // May be used in future implementations
+    #[allow(dead_code, clippy::missing_errors_doc, clippy::unused_async)] // May be used in future implementations
     async fn get_secret(&self, _secret_name: &str) -> Result<()> {
         Err(anyhow::anyhow!(
             "Not implemented - waiting for correct SDK API"

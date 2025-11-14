@@ -20,6 +20,7 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
+# Note: .env.encrypted (SOPS encrypted) can be safely committed to git
 
 # Backup files
 *.backup

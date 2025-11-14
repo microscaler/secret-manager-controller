@@ -1,9 +1,8 @@
-//! # Provider Trait
+//! # Provider Modules
 //!
-//! Abstract interface for cloud provider secret managers.
+//! Provider modules for different cloud secret managers.
 //!
-//! This trait allows the controller to work with multiple cloud providers
-//! (GCP, AWS, Azure) through a unified interface.
+//! Each provider implements the `SecretManagerProvider` trait defined below.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -21,3 +20,8 @@ pub trait SecretManagerProvider: Send + Sync {
     /// Delete a secret (optional - may not be supported by all providers)
     async fn delete_secret(&self, secret_name: &str) -> Result<()>;
 }
+
+// Provider implementations
+pub mod gcp;
+// pub mod aws;  // Disabled for now
+// pub mod azure;  // Disabled for now

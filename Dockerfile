@@ -4,24 +4,15 @@
 
 # Stage 1: Build the Rust binary
 ARG BUILDPLATFORM=linux/amd64
-FROM --platform=$BUILDPLATFORM rust:1.75-alpine AS builder
+FROM --platform=$BUILDPLATFORM rust:1.75-bookworm AS builder
 
 # Install build dependencies
-# Note: musl-gcc is not needed when using cargo-zigbuild (zigbuild handles cross-compilation)
-# musl-dev is kept for any C dependencies that might need it
-RUN apk add --no-cache \
-    musl-dev \
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
     git \
     curl \
-    openssl-dev \
-    openssl-libs-static \
-    pkgconfig
-
-# Install cargo-zigbuild for cross-compilation
-RUN cargo install cargo-zigbuild
-
-# Install musl target
-RUN rustup target add x86_64-unknown-linux-musl
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
@@ -33,22 +24,21 @@ COPY src ./src
 COPY config ./config
 
 # Build the binary in release mode
-# Use zigbuild for cross-compilation (works on any platform)
-RUN cargo zigbuild --release --target x86_64-unknown-linux-musl
+RUN cargo build --release --bin secret-manager-controller
 
 # Stage 2: Runtime image
 ARG TARGETPLATFORM=linux/amd64
-FROM --platform=${TARGETPLATFORM} alpine:3.19
+FROM --platform=${TARGETPLATFORM} debian:bookworm-slim
 
 # Install runtime dependencies
 # git: Required for ArgoCD support (cloning repositories)
 # kustomize: Required for Kustomize Build Mode
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libgcc \
     git \
-    curl && \
-    # Install kustomize directly (no bash needed - download binary instead of install script)
+    curl \
+    && rm -rf /var/lib/apt/lists/* && \
+    # Install kustomize
     KUSTOMIZE_VERSION=5.8.0 && \
     curl -L "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" | \
     tar -xz -C /usr/local/bin && \
@@ -57,7 +47,7 @@ RUN apk add --no-cache \
 WORKDIR /app
 
 # Copy binary from builder stage
-COPY --from=builder /build/target/x86_64-unknown-linux-musl/release/secret-manager-controller /app/secret-manager-controller
+COPY --from=builder /build/target/release/secret-manager-controller /app/secret-manager-controller
 RUN chmod +x /app/secret-manager-controller
 
 # Expose metrics port

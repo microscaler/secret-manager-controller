@@ -34,19 +34,12 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info};
 
-pub mod aws;
-pub mod azure;
-pub mod gcp;
-pub mod kustomize;
-pub mod metrics;
-pub mod otel;
-pub mod parser;
+pub mod controller;
+pub mod observability;
 pub mod provider;
-pub mod reconciler;
-pub mod server;
 
-use reconciler::Reconciler;
-use server::{start_server, ServerState};
+use controller::reconciler::Reconciler;
+use controller::server::{start_server, ServerState};
 
 /// SecretManagerConfig Custom Resource Definition
 ///
@@ -322,12 +315,20 @@ pub struct Condition {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Configure rustls crypto provider FIRST, before any other operations
+    // Required for rustls 0.23+ when no default provider is set via features
+    // This must be called synchronously before any async operations that use rustls
+    // We use ring as the crypto provider
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     // Initialize OpenTelemetry first (if configured)
     // This will set up tracing with Otel support
     // Note: Otel config can come from CRD, but we initialize early from env vars
     // Per-resource Otel config is handled in the reconciler
     let otel_tracer_provider =
-        otel::init_otel(None).context("Failed to initialize OpenTelemetry")?;
+        observability::otel::init_otel(None).context("Failed to initialize OpenTelemetry")?;
 
     // If Otel wasn't initialized, use standard tracing subscriber
     if otel_tracer_provider.is_none() {
@@ -340,9 +341,15 @@ async fn main() -> Result<()> {
     }
 
     info!("Starting Secret Manager Controller");
+    info!(
+        "Build info: timestamp={}, datetime={}, git_hash={}",
+        env!("BUILD_TIMESTAMP"),
+        env!("BUILD_DATETIME"),
+        env!("BUILD_GIT_HASH")
+    );
 
     // Initialize metrics
-    metrics::register_metrics()?;
+    observability::metrics::register_metrics()?;
 
     // Create server state
     let server_state = Arc::new(ServerState {
@@ -381,14 +388,14 @@ async fn main() -> Result<()> {
     Controller::new(configs, watcher::Config::default())
         .shutdown_on_signal()
         .run(
-            reconciler::Reconciler::reconcile,
+            controller::reconciler::Reconciler::reconcile,
             |obj, error, _ctx| {
                 error!(
                     "Reconciliation error for {}: {:?}",
                     obj.metadata.name.as_deref().unwrap_or("unknown"),
                     error
                 );
-                metrics::increment_reconciliation_errors();
+                observability::metrics::increment_reconciliation_errors();
                 Action::requeue(std::time::Duration::from_secs(60))
             },
             reconciler.clone(),
@@ -399,7 +406,7 @@ async fn main() -> Result<()> {
     info!("Controller stopped");
 
     // Shutdown OpenTelemetry tracer provider if it was initialized
-    otel::shutdown_otel(otel_tracer_provider);
+    observability::otel::shutdown_otel(otel_tracer_provider);
 
     Ok(())
 }

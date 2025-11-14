@@ -37,7 +37,7 @@ pub async fn start_server(port: u16, state: Arc<ServerState>) -> Result<(), anyh
 }
 
 fn gather() -> Vec<prometheus::proto::MetricFamily> {
-    use crate::metrics::REGISTRY;
+    use crate::observability::metrics::REGISTRY;
     REGISTRY.gather()
 }
 

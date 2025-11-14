@@ -4,14 +4,14 @@
 //!
 //! The reconciler:
 //! - Watches `SecretManagerConfig` resources across all namespaces
-//! - Fetches GitRepository or Application artifacts
+//! - Fetches `GitRepository` or `Application` artifacts
 //! - Processes application secret files or kustomize builds
 //! - Syncs secrets to Google Cloud Secret Manager
 //! - Updates resource status with reconciliation results
 //!
 //! ## Reconciliation Flow
 //!
-//! 1. Get source (FluxCD GitRepository or ArgoCD Application)
+//! 1. Get source (`FluxCD` `GitRepository` or `ArgoCD` `Application`)
 //! 2. Extract artifact path
 //! 3. Choose mode:
 //!    - **Kustomize Build Mode**: Run `kustomize build` and extract secrets
@@ -20,14 +20,15 @@
 //! 5. Sync secrets to GCP Secret Manager
 //! 6. Update status
 
-use crate::aws::AwsSecretManager;
-use crate::azure::AzureKeyVault;
-use crate::gcp::SecretManagerClient as GcpSecretManagerClient;
+// use crate::provider::aws::AwsSecretManager;  // Disabled for now
+// use crate::provider::azure::AzureKeyVault;  // Disabled for now
+use crate::provider::gcp::SecretManagerClient as GcpSecretManagerClient;
 use crate::provider::SecretManagerProvider;
 use crate::{
-    metrics, parser, Condition, ProviderConfig, SecretManagerConfig, SecretManagerConfigStatus,
+    observability, Condition, ProviderConfig, SecretManagerConfig, SecretManagerConfigStatus,
     SourceRef,
 };
+use crate::controller::parser;
 use anyhow::{Context, Result};
 use kube::Client;
 use kube_runtime::controller::Action;
@@ -46,6 +47,8 @@ use tracing::{error, info, warn};
 ///         {key} (if neither exists)
 ///
 /// Invalid characters (`.`, `/`, etc.) are replaced with `_` to match GCP Secret Manager requirements
+#[must_use]
+#[allow(clippy::doc_markdown)]
 #[cfg(test)]
 pub fn construct_secret_name(prefix: Option<&str>, key: &str, suffix: Option<&str>) -> String {
     construct_secret_name_impl(prefix, key, suffix)
@@ -84,6 +87,7 @@ fn construct_secret_name_impl(prefix: Option<&str>, key: &str, suffix: Option<&s
 /// Sanitize secret name to comply with GCP Secret Manager naming requirements
 /// Replaces invalid characters (`.`, `/`, etc.) with `_`
 /// Matches kustomize-google-secret-manager character sanitization behavior
+#[must_use]
 #[cfg(test)]
 pub fn sanitize_secret_name(name: &str) -> String {
     sanitize_secret_name_impl(name)
@@ -144,6 +148,7 @@ pub struct Reconciler {
 }
 
 impl Reconciler {
+    #[allow(clippy::missing_errors_doc)]
     pub async fn new(client: Client) -> Result<Self> {
         // Provider is created per-reconciliation based on provider config
         // Per-resource auth config is handled in reconcile()
@@ -209,6 +214,7 @@ impl Reconciler {
         Ok(None)
     }
 
+    #[allow(clippy::too_many_lines, clippy::missing_errors_doc)]
     pub async fn reconcile(
         config: std::sync::Arc<SecretManagerConfig>,
         ctx: std::sync::Arc<Reconciler>,
@@ -233,7 +239,7 @@ impl Reconciler {
             info!("Reconciling SecretManagerConfig: {}", name);
         }
 
-        metrics::increment_reconciliations();
+        observability::metrics::increment_reconciliations();
 
         // Get source and artifact path based on source type
         let artifact_path = match config.spec.source_ref.kind.as_str() {
@@ -248,7 +254,7 @@ impl Reconciler {
                     Ok(repo) => repo,
                     Err(e) => {
                         error!("Failed to get FluxCD GitRepository: {}", e);
-                        metrics::increment_reconciliation_errors();
+                        observability::metrics::increment_reconciliation_errors();
                         return Err(ReconcilerError::ReconciliationFailed(e));
                     }
                 };
@@ -264,7 +270,7 @@ impl Reconciler {
                     }
                     Err(e) => {
                         error!("Failed to get FluxCD artifact path: {}", e);
-                        metrics::increment_reconciliation_errors();
+                        observability::metrics::increment_reconciliation_errors();
                         return Err(ReconcilerError::ReconciliationFailed(e));
                     }
                 }
@@ -282,14 +288,14 @@ impl Reconciler {
                     }
                     Err(e) => {
                         error!("Failed to get ArgoCD artifact path: {}", e);
-                        metrics::increment_reconciliation_errors();
+                        observability::metrics::increment_reconciliation_errors();
                         return Err(ReconcilerError::ReconciliationFailed(e));
                     }
                 }
             }
             _ => {
                 error!("Unsupported source kind: {}", config.spec.source_ref.kind);
-                metrics::increment_reconciliation_errors();
+                observability::metrics::increment_reconciliation_errors();
                 return Err(ReconcilerError::ReconciliationFailed(anyhow::anyhow!(
                     "Unsupported source kind: {}",
                     config.spec.source_ref.kind
@@ -307,20 +313,17 @@ impl Reconciler {
                         let auth_json = serde_json::to_value(auth_config)
                             .context("Failed to serialize gcpAuth config")?;
                         let auth_type_str = auth_json.get("authType").and_then(|t| t.as_str());
-                        match auth_type_str {
-                            Some("WorkloadIdentity") => {
-                                let email = auth_json
-                                    .get("serviceAccountEmail")
-                                    .and_then(|e| e.as_str())
-                                    .context("WorkloadIdentity requires serviceAccountEmail")?
-                                    .to_string();
-                                (Some("WorkloadIdentity"), Some(email))
-                            }
-                            _ => {
-                                // Default to Workload Identity
-                                info!("No auth type specified, defaulting to Workload Identity");
-                                (Some("WorkloadIdentity"), None)
-                            }
+                        if let Some("WorkloadIdentity") = auth_type_str {
+                            let email = auth_json
+                                .get("serviceAccountEmail")
+                                .and_then(|e| e.as_str())
+                                .context("WorkloadIdentity requires serviceAccountEmail")?
+                                .to_string();
+                            (Some("WorkloadIdentity"), Some(email))
+                        } else {
+                            // Default to Workload Identity
+                            info!("No auth type specified, defaulting to Workload Identity");
+                            (Some("WorkloadIdentity"), None)
                         }
                     } else {
                         // Default to Workload Identity when auth is not specified
@@ -337,17 +340,25 @@ impl Reconciler {
                 .await?;
                 Box::new(gcp_client)
             }
-            ProviderConfig::Aws(aws_config) => {
-                let aws_provider = AwsSecretManager::new(aws_config, &ctx.client)
-                    .await
-                    .context("Failed to create AWS Secrets Manager client")?;
-                Box::new(aws_provider)
+            ProviderConfig::Aws(_aws_config) => {
+                // AWS support disabled for now
+                return Err(ReconcilerError::ReconciliationFailed(anyhow::anyhow!(
+                    "AWS provider is currently disabled"
+                )));
+                // let aws_provider = AwsSecretManager::new(aws_config, &ctx.client)
+                //     .await
+                //     .context("Failed to create AWS Secrets Manager client")?;
+                // Box::new(aws_provider)
             }
-            ProviderConfig::Azure(azure_config) => {
-                let azure_provider = AzureKeyVault::new(azure_config, &ctx.client)
-                    .await
-                    .context("Failed to create Azure Key Vault client")?;
-                Box::new(azure_provider)
+            ProviderConfig::Azure(_azure_config) => {
+                // Azure support disabled for now
+                return Err(ReconcilerError::ReconciliationFailed(anyhow::anyhow!(
+                    "Azure provider is currently disabled"
+                )));
+                // let azure_provider = AzureKeyVault::new(azure_config, &ctx.client)
+                //     .await
+                //     .context("Failed to create Azure Key Vault client")?;
+                // Box::new(azure_provider)
             }
         };
 
@@ -359,7 +370,7 @@ impl Reconciler {
             // This supports overlays, patches, and generators
             info!("Using kustomize build mode on path: {}", kustomize_path);
 
-            match crate::kustomize::extract_secrets_from_kustomize(&artifact_path, kustomize_path) {
+            match crate::controller::kustomize::extract_secrets_from_kustomize(&artifact_path, kustomize_path) {
                 Ok(secrets) => {
                     let secret_prefix = config.spec.secrets.prefix.as_deref().unwrap_or("default");
                     match ctx
@@ -372,14 +383,14 @@ impl Reconciler {
                         }
                         Err(e) => {
                             error!("Failed to process kustomize secrets: {}", e);
-                            metrics::increment_reconciliation_errors();
+                            observability::metrics::increment_reconciliation_errors();
                             return Err(ReconcilerError::ReconciliationFailed(e));
                         }
                     }
                 }
                 Err(e) => {
                     error!("Failed to extract secrets from kustomize build: {}", e);
-                    metrics::increment_reconciliation_errors();
+                    observability::metrics::increment_reconciliation_errors();
                     return Err(ReconcilerError::ReconciliationFailed(e));
                 }
             }
@@ -404,7 +415,7 @@ impl Reconciler {
                         "Failed to find application files for environment '{}': {}",
                         config.spec.secrets.environment, e
                     );
-                    metrics::increment_reconciliation_errors();
+                    observability::metrics::increment_reconciliation_errors();
                     return Err(ReconcilerError::ReconciliationFailed(e));
                 }
             };
@@ -431,13 +442,13 @@ impl Reconciler {
         // Update status
         if let Err(e) = ctx.update_status(&config, secrets_synced).await {
             error!("Failed to update status: {}", e);
-            metrics::increment_reconciliation_errors();
+            observability::metrics::increment_reconciliation_errors();
             return Err(ReconcilerError::ReconciliationFailed(e));
         }
 
         // Update metrics
-        metrics::observe_reconciliation_duration(start.elapsed().as_secs_f64());
-        metrics::set_secrets_managed(secrets_synced as i64);
+        observability::metrics::observe_reconciliation_duration(start.elapsed().as_secs_f64());
+        observability::metrics::set_secrets_managed(i64::from(secrets_synced));
 
         info!(
             "Reconciliation complete for {} (synced {} secrets)",
@@ -447,6 +458,7 @@ impl Reconciler {
     }
 
     /// Get FluxCD GitRepository resource
+    #[allow(clippy::doc_markdown, clippy::missing_errors_doc)]
     async fn get_flux_git_repository(&self, source_ref: &SourceRef) -> Result<serde_json::Value> {
         // Use Kubernetes API to get GitRepository
         // GitRepository is a CRD from source.toolkit.fluxcd.io/v1beta2
@@ -471,6 +483,7 @@ impl Reconciler {
     }
 
     /// Get artifact path from FluxCD GitRepository status
+    #[allow(clippy::doc_markdown, clippy::unused_async, clippy::missing_errors_doc, clippy::unused_self)]
     fn get_flux_artifact_path(&self, git_repo: &serde_json::Value) -> Result<PathBuf> {
         // Extract artifact path from GitRepository status
         // Flux stores artifacts at: /tmp/flux-source-<namespace>-<name>-<revision>
@@ -509,6 +522,7 @@ impl Reconciler {
 
     /// Get artifact path from ArgoCD Application
     /// Clones the Git repository directly from the Application spec
+    #[allow(clippy::doc_markdown, clippy::missing_errors_doc, clippy::unused_async, clippy::too_many_lines)]
     async fn get_argocd_artifact_path(&self, source_ref: &SourceRef) -> Result<PathBuf> {
         use kube::api::ApiResource;
         use kube::core::DynamicObject;
@@ -698,6 +712,7 @@ impl Reconciler {
         Ok(path_buf)
     }
 
+    #[allow(clippy::too_many_lines, clippy::unused_async)]
     async fn process_application_files(
         &self,
         provider: &dyn SecretManagerProvider,
@@ -744,7 +759,7 @@ impl Reconciler {
         }
 
         if updated_count > 0 {
-            metrics::increment_secrets_updated(updated_count as i64);
+            observability::metrics::increment_secrets_updated(i64::from(updated_count));
             warn!(
                 "Updated {} secrets from git (GitOps source of truth). Manual changes in cloud provider were overwritten.",
                 updated_count
@@ -766,7 +781,7 @@ impl Reconciler {
                 Ok(was_updated) => {
                     count += 1;
                     if was_updated {
-                        metrics::increment_secrets_updated(1);
+                        observability::metrics::increment_secrets_updated(1);
                         info!("Updated properties secret {} from git", secret_name);
                     }
                 }
@@ -777,7 +792,7 @@ impl Reconciler {
             }
         }
 
-        metrics::increment_secrets_synced(count as i64);
+        observability::metrics::increment_secrets_synced(i64::from(count));
         Ok(count)
     }
 
@@ -817,14 +832,14 @@ impl Reconciler {
         }
 
         if updated_count > 0 {
-            metrics::increment_secrets_updated(updated_count as i64);
+            observability::metrics::increment_secrets_updated(i64::from(updated_count));
             warn!(
                 "Updated {} secrets from kustomize build (GitOps source of truth). Manual changes in cloud provider were overwritten.",
                 updated_count
             );
         }
 
-        metrics::increment_secrets_synced(count as i64);
+        observability::metrics::increment_secrets_synced(i64::from(count));
         Ok(count)
     }
 

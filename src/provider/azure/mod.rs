@@ -7,7 +7,7 @@
 //! - Retrieve secret values
 //! - Support Workload Identity and Service Principal authentication
 
-use crate::metrics;
+use crate::observability::metrics;
 use crate::provider::SecretManagerProvider;
 use crate::{AzureAuthConfig, AzureConfig};
 use anyhow::{Context, Result};
@@ -29,7 +29,7 @@ impl AzureKeyVault {
     /// Supports both Service Principal and Workload Identity
     /// # Errors
     /// Returns an error if Azure client initialization fails
-    #[allow(clippy::missing_errors_doc)]
+    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
     pub async fn new(config: &AzureConfig, _k8s_client: &kube::Client) -> Result<Self> {
         // Construct vault URL from vault name
         // Format: https://{vault-name}.vault.azure.net/
