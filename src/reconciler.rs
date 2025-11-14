@@ -29,6 +29,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use thiserror::Error;
 use tracing::{error, info, warn};
+use md5;
 
 /// Construct secret name with prefix, key, and suffix
 /// Matches kustomize-google-secret-manager naming convention for drop-in replacement
@@ -381,7 +382,7 @@ impl Reconciler {
     }
 
     /// Get artifact path from ArgoCD Application
-    /// ArgoCD doesn't store artifacts like FluxCD, so we need to access the Git repository directly
+    /// Clones the Git repository directly from the Application spec
     async fn get_argocd_artifact_path(
         &self,
         source_ref: &crate::SourceRef,
@@ -424,50 +425,138 @@ impl Reconciler {
             .and_then(|r| r.as_str())
             .unwrap_or("HEAD");
 
-        let path = source
-            .get("path")
-            .and_then(|p| p.as_str())
-            .unwrap_or("");
-
         info!(
-            "ArgoCD Application source: repo={}, revision={}, path={}",
-            repo_url, target_revision, path
+            "ArgoCD Application source: repo={}, revision={}",
+            repo_url, target_revision
         );
 
-        // For ArgoCD, we need to clone the repository or access it via ArgoCD's mechanisms
-        // ArgoCD stores repositories in /tmp/apps/<namespace>/<name>/<revision>
-        // However, this path might not be accessible. We'll use a similar pattern to FluxCD
-        // In production, you might need to clone the repo yourself or use ArgoCD's repo server API
-        
-        // For now, construct a path similar to FluxCD pattern
-        // TODO: Implement proper ArgoCD repository access
-        // This might require:
-        // 1. Cloning the repository ourselves
-        // 2. Using ArgoCD's repo server API
-        // 3. Accessing ArgoCD's internal repository cache
-        
-        let default_path = format!(
-            "/tmp/argocd-source-{}-{}-{}",
-            source_ref.namespace,
-            source_ref.name,
-            target_revision.replace('/', "-")
-        );
-        
-        warn!(
-            "ArgoCD Application artifact path not directly accessible. Using default path: {}. \
-            You may need to clone the repository or configure ArgoCD repository access.",
-            default_path
-        );
-        
-        // Check if path exists (ArgoCD might have cloned it)
-        let path_buf = PathBuf::from(&default_path);
+        // Clone repository to temporary directory
+        // Use a deterministic path based on Application name/namespace/revision for caching
+        let repo_hash = format!("{:x}", md5::compute(format!("{}-{}-{}", source_ref.namespace, source_ref.name, target_revision)));
+        let clone_path = format!("/tmp/argocd-repo-{}", repo_hash);
+        let path_buf = PathBuf::from(&clone_path);
+
+        // Check if repository already exists and is at the correct revision
         if path_buf.exists() {
-            Ok(path_buf)
-        } else {
-            // Return path anyway - caller can handle cloning if needed
-            // For now, this will fail gracefully with a clear error message
-            Ok(path_buf)
+            // Verify the revision matches by checking HEAD
+            let git_dir = path_buf.join(".git");
+            if git_dir.exists() || path_buf.join("HEAD").exists() {
+                // Check current HEAD revision
+                let output = tokio::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&path_buf)
+                    .arg("rev-parse")
+                    .arg("HEAD")
+                    .output()
+                    .await;
+                
+                if let Ok(output) = output {
+                    if output.status.success() {
+                        let current_rev = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        // Try to resolve target revision
+                        let target_output = tokio::process::Command::new("git")
+                            .arg("-C")
+                            .arg(&path_buf)
+                            .arg("rev-parse")
+                            .arg(target_revision)
+                            .output()
+                            .await;
+                        
+                        if let Ok(target_output) = target_output {
+                            if target_output.status.success() {
+                                let target_rev = String::from_utf8_lossy(&target_output.stdout).trim().to_string();
+                                if current_rev == target_rev {
+                                    info!("Using cached ArgoCD repository at {} (revision: {})", clone_path, target_revision);
+                                    return Ok(path_buf);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Remove stale repository
+            if let Err(e) = tokio::fs::remove_dir_all(&path_buf).await {
+                warn!("Failed to remove stale repository at {}: {}", clone_path, e);
+            }
         }
+
+        // Clone the repository using git command
+        info!("Cloning ArgoCD repository: {} (revision: {})", repo_url, target_revision);
+        
+        // Create parent directory
+        tokio::fs::create_dir_all(&path_buf.parent().unwrap()).await?;
+        
+        // Clone repository (shallow clone for efficiency)
+        // First try shallow clone with branch (works for branch/tag names)
+        let clone_output = tokio::process::Command::new("git")
+            .arg("clone")
+            .arg("--depth")
+            .arg("1")
+            .arg("--branch")
+            .arg(target_revision)
+            .arg(repo_url)
+            .arg(&clone_path)
+            .output()
+            .await
+            .context(format!("Failed to execute git clone for {}", repo_url))?;
+
+        if !clone_output.status.success() {
+            // If branch clone fails, clone default branch and checkout specific revision
+            // This handles commit SHAs and other revision types
+            let clone_output = tokio::process::Command::new("git")
+                .arg("clone")
+                .arg("--depth")
+                .arg("50")  // Deeper clone to ensure revision is available
+                .arg(repo_url)
+                .arg(&clone_path)
+                .output()
+                .await
+                .context(format!("Failed to execute git clone for {}", repo_url))?;
+
+            if !clone_output.status.success() {
+                let error_msg = String::from_utf8_lossy(&clone_output.stderr);
+                return Err(anyhow::anyhow!(
+                    "Failed to clone repository {}: {}",
+                    repo_url,
+                    error_msg
+                ));
+            }
+
+            // Fetch the specific revision if needed
+            let fetch_output = tokio::process::Command::new("git")
+                .arg("-C")
+                .arg(&clone_path)
+                .arg("fetch")
+                .arg("--depth")
+                .arg("50")
+                .arg("origin")
+                .arg(target_revision)
+                .output()
+                .await;
+
+            // Checkout specific revision
+            let checkout_output = tokio::process::Command::new("git")
+                .arg("-C")
+                .arg(&clone_path)
+                .arg("checkout")
+                .arg(target_revision)
+                .output()
+                .await
+                .context(format!("Failed to checkout revision {} in repository {}", target_revision, repo_url))?;
+
+            if !checkout_output.status.success() {
+                let error_msg = String::from_utf8_lossy(&checkout_output.stderr);
+                return Err(anyhow::anyhow!(
+                    "Failed to checkout revision {} in repository {}: {}",
+                    target_revision,
+                    repo_url,
+                    error_msg
+                ));
+            }
+        }
+
+        info!("Successfully cloned ArgoCD repository to {} (revision: {})", clone_path, target_revision);
+        Ok(path_buf)
     }
 
     async fn process_application_files(

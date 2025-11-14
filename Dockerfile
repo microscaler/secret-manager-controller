@@ -5,9 +5,17 @@ ARG TARGETPLATFORM=linux/amd64
 FROM --platform=${TARGETPLATFORM} alpine:3.19
 
 # Install runtime dependencies
+# git: Required for ArgoCD support (cloning repositories)
+# kustomize: Required for Kustomize Build Mode
 RUN apk add --no-cache \
     ca-certificates \
-    libgcc
+    libgcc \
+    git \
+    curl && \
+    # Install kustomize
+    curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash && \
+    mv kustomize /usr/local/bin/ && \
+    chmod +x /usr/local/bin/kustomize
 
 # Create app directory with proper permissions for live updates
 WORKDIR /app

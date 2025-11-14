@@ -1,6 +1,6 @@
 # Secret Manager Controller
 
-Kubernetes controller that syncs secrets from Flux GitRepositories to Google Cloud Secret Manager.
+Kubernetes controller that syncs secrets from GitOps repositories (FluxCD/ArgoCD) to Google Cloud Secret Manager.
 
 ## Overview
 
@@ -16,20 +16,48 @@ This controller:
 
 ## Architecture
 
-```
-GitRepository (Flux) → SourceController → Artifact Cache
-                                         ↓
-                    SecretManagerConfig (CRD)
-                                         ↓
-                    Secret Manager Controller
-                    ├─ HTTP Server (metrics, probes)
-                    ├─ SOPS Decryption
-                    └─ GitOps Reconciliation
-                                         ↓
-                    Google Cloud Secret Manager
-                    (Git is source of truth)
-                                         ↓
-                    CloudRun Services/Jobs (via Upbound Provider)
+```mermaid
+flowchart TB
+    subgraph FluxCD["FluxCD Path"]
+        FR[GitRepository<br/>CRD]
+        SC[SourceController]
+        AC[Artifact Cache<br/>/tmp/flux-source-*]
+        FR --> SC
+        SC --> AC
+    end
+    
+    subgraph ArgoCD["ArgoCD Path"]
+        AA[Application<br/>CRD]
+        GC[Git Clone<br/>Direct Repository Access]
+        AA --> GC
+    end
+    
+    subgraph Controller["Secret Manager Controller"]
+        CRD[SecretManagerConfig<br/>CRD]
+        HTTP[HTTP Server<br/>Metrics & Probes]
+        SOPS[SOPS Decryption]
+        GIT[Git Operations]
+        RECON[GitOps Reconciliation]
+        
+        CRD --> RECON
+        RECON --> SOPS
+        RECON --> GIT
+        RECON --> HTTP
+    end
+    
+    subgraph GCP["Google Cloud"]
+        GSM[Secret Manager<br/>Git is source of truth]
+        CR[CloudRun Services/Jobs<br/>via Upbound Provider]
+        GSM --> CR
+    end
+    
+    AC --> CRD
+    GC --> CRD
+    RECON --> GSM
+    
+    style CRD fill:#e1f5ff
+    style GSM fill:#fff4e1
+    style RECON fill:#e8f5e9
 ```
 
 ## GitOps Reconciliation
@@ -40,6 +68,74 @@ The controller implements **GitOps-style reconciliation** where Git is the sourc
 2. **Manual Changes Overwritten**: If a secret is manually changed in GCP Secret Manager, the controller will detect the difference and overwrite it with the Git value on the next reconciliation
 3. **Version Management**: New versions are created in GCP Secret Manager when values change; old versions remain accessible but the new version becomes "latest"
 4. **Continuous Reconciliation**: The controller continuously reconciles to ensure GCP Secret Manager matches Git
+
+### Reconciliation Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User/Developer
+    participant Git as Git Repository<br/>(Source of Truth)
+    participant Flux as FluxCD/ArgoCD<br/>GitOps Tool
+    participant K8s as Kubernetes API<br/>SecretManagerConfig CRD
+    participant Controller as Secret Manager<br/>Controller
+    participant SOPS as SOPS Decryption<br/>(if encrypted)
+    participant Kustomize as Kustomize Build<br/>(if enabled)
+    participant GCP as GCP Secret Manager
+    participant CloudRun as CloudRun Services<br/>(via Upbound)
+    
+    Note over User,Git: Initial Setup
+    User->>Git: Commit secrets to repository<br/>(application.secrets.env)
+    User->>K8s: Apply SecretManagerConfig<br/>kubectl apply -f config.yaml
+    K8s->>Controller: Watch event: CRD created
+    
+    Note over Controller: Reconciliation Triggered
+    Controller->>K8s: Get SecretManagerConfig spec
+    Controller->>Flux: Get Git source (FluxCD/ArgoCD)
+    
+    alt FluxCD Path
+        Flux->>Controller: Provide artifact path<br/>(from SourceController cache)
+    else ArgoCD Path
+        Controller->>Git: Clone repository directly<br/>(extract from Application spec)
+        Git->>Controller: Repository cloned<br/>(cached for efficiency)
+    end
+    
+    Note over Controller: Process Secrets
+    Controller->>SOPS: Decrypt if SOPS-encrypted<br/>(using GPG key from K8s secret)
+    SOPS-->>Controller: Decrypted secrets
+    
+    alt Kustomize Build Mode
+        Controller->>Kustomize: Run kustomize build<br/>(on specified path)
+        Kustomize->>Controller: Generated Secret resources<br/>(with overlays/patches)
+        Controller->>Controller: Extract secrets from<br/>Kubernetes Secret resources
+    else Raw File Mode
+        Controller->>Controller: Parse application.secrets.env<br/>(direct file reading)
+    end
+    
+    Note over Controller: Sync to GCP
+    loop For each secret
+        Controller->>GCP: Create or update secret<br/>(with prefix/suffix naming)
+        alt Secret value changed
+            GCP->>GCP: Create new version<br/>(old versions preserved)
+            GCP-->>Controller: Secret updated
+        else No change
+            GCP-->>Controller: Secret unchanged
+        end
+    end
+    
+    Controller->>K8s: Update SecretManagerConfig status<br/>(secrets synced, conditions)
+    K8s-->>User: Status updated<br/>(Ready condition, sync count)
+    
+    Note over CloudRun: Consumption
+    CloudRun->>GCP: Read secrets<br/>(via Upbound Provider)
+    GCP-->>CloudRun: Secret values<br/>(latest version)
+    
+    Note over User,Git: Continuous Reconciliation
+    User->>Git: Update secrets in Git
+    Git->>Flux: GitOps tool detects change
+    Flux->>Controller: Trigger reconciliation<br/>(via watch mechanism)
+    Controller->>GCP: Sync updated secrets<br/>(Git overwrites manual changes)
+```
 
 ## CRD Definition
 
@@ -73,14 +169,23 @@ spec:
 
 The controller expects the following structure (matching Flux kustomize):
 
-```
-microservices/
-  {service-name}/
-    deployment-configuration/
-      {environment}/
-        application.secrets.env      # ENV format secrets
-        application.secrets.yaml     # YAML format secrets
-        application.properties       # Properties file
+```mermaid
+graph TD
+    Root[Git Repository Root]
+    Root --> Microservices[microservices/]
+    Microservices --> Service["{service-name}/"]
+    Service --> Config[deployment-configuration/]
+    Config --> Profiles[profiles/]
+    Profiles --> Env["{environment}/"]
+    Env --> SecretsEnv[application.secrets.env<br/>ENV format secrets]
+    Env --> SecretsYaml[application.secrets.yaml<br/>YAML format secrets]
+    Env --> Properties[application.properties<br/>Properties file]
+    Env --> Kustomize[kustomization.yaml<br/>Kustomize config]
+    
+    style Env fill:#e8f5e9
+    style SecretsEnv fill:#fff4e1
+    style SecretsYaml fill:#fff4e1
+    style Properties fill:#e1f5ff
 ```
 
 ## Secret Naming
@@ -127,10 +232,11 @@ spec:
 ### Prerequisites
 
 - Rust 1.75+
-- Kubernetes cluster with Flux installed (or any GitOps tool that provides GitRepository artifacts)
+- Kubernetes cluster with FluxCD or ArgoCD installed
 - GCP credentials configured
 - `google-cloud-secret-manager` Rust crate dependencies
 - **For Kustomize Build Mode**: `kustomize` binary must be available in the controller container (v5.0+)
+- **For ArgoCD support**: `git` binary must be available in the controller container (v2.0+)
 
 ### Build
 
@@ -150,7 +256,7 @@ cargo run
 
 ### Deploy to Kubernetes
 
-The controller deploys to the `flux-system` namespace (same as FluxCD) since it's heavily reliant on FluxCD for GitRepository resources.
+The controller deploys to the `flux-system` namespace (same as FluxCD) but works with both FluxCD and ArgoCD.
 
 ```bash
 # Apply CRD
@@ -242,8 +348,10 @@ sourceRef:
   namespace: argocd
 ```
 - Extracts Git source from Application spec
-- **Note:** ArgoCD support requires Git repository access configuration
-- May need to clone repository or access ArgoCD's repository cache
+- **Fully supported**: Controller clones the Git repository directly
+- Supports both HTTPS and SSH Git URLs
+- Caches repositories for efficiency (reuses if revision matches)
+- **Git Authentication**: Supports SSH keys and HTTPS tokens from Kubernetes secrets
 - See examples for ArgoCD configuration
 
 ### RBAC
