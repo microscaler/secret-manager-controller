@@ -14,7 +14,7 @@ async fn test_gcp_create_secret_contract() {
         i.given("a GCP project exists");
         i.request
             .method("POST")
-            .path(format!("/v1/projects/test-project/secrets"))
+            .path("/v1/projects/test-project/secrets".to_string())
             .header("authorization", "Bearer test-token")
             .header("content-type", "application/json")
             .json_body(json!({
@@ -52,9 +52,7 @@ async fn test_gcp_add_secret_version_contract() {
         i.given("a secret exists in GCP Secret Manager");
         i.request
             .method("POST")
-            .path(format!(
-                "/v1/projects/test-project/secrets/test-secret-name:addVersion"
-            ))
+            .path("/v1/projects/test-project/secrets/test-secret-name:addVersion".to_string())
             .header("authorization", "Bearer test-token")
             .header("content-type", "application/json")
             .json_body(json!({
@@ -90,9 +88,7 @@ async fn test_gcp_get_secret_version_contract() {
         i.given("a secret exists with at least one version");
         i.request
             .method("GET")
-            .path(format!(
-                "/v1/projects/test-project/secrets/test-secret-name/versions/latest"
-            ))
+            .path("/v1/projects/test-project/secrets/test-secret-name/versions/latest".to_string())
             .header("authorization", "Bearer test-token");
         i.response
             .status(200)
@@ -122,9 +118,9 @@ async fn test_gcp_secret_not_found_contract() {
         i.given("the secret does not exist");
         i.request
             .method("GET")
-            .path(format!(
-                "/v1/projects/test-project/secrets/non-existent-secret/versions/latest"
-            ))
+            .path(
+                "/v1/projects/test-project/secrets/non-existent-secret/versions/latest".to_string(),
+            )
             .header("authorization", "Bearer test-token");
         i.response
             .status(404)

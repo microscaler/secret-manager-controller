@@ -12,43 +12,8 @@ default:
 # Development Environment
 # ============================================================================
 
-# Start development environment (Kind + Tilt)
-dev-up:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "🚀 Starting Secret Manager Controller development environment (Kind)..."
-    
-    # Check if Docker is running
-    if ! docker info >/dev/null 2>&1; then
-        echo "❌ Error: Docker daemon is not running"
-        echo "   Please start Docker Desktop and try again"
-        exit 1
-    fi
-    
-    # Check if cluster already exists
-    if kind get clusters | grep -q "^secret-manager-controller$"; then
-        echo "✅ Kind cluster 'secret-manager-controller' already exists"
-    else
-        # Create Kind cluster
-        echo "📦 Creating Kind cluster..."
-        if ! kind create cluster --config kind-config.yaml; then
-            echo "❌ Failed to create Kind cluster"
-            exit 1
-        fi
-        
-        # Wait for cluster to be ready
-        echo "⏳ Waiting for cluster to be ready..."
-        kubectl wait --for=condition=Ready nodes --all --timeout=300s --context kind-secret-manager-controller || {
-            echo "⚠️  Warning: Cluster may not be fully ready yet"
-        }
-    fi
-    
-    # Start Tilt
-    echo "🎯 Starting Tilt..."
-    tilt up
-
 # Start development environment (K3s + Tilt)
-dev-up-k3s:
+dev-up:
     #!/usr/bin/env bash
     set -euo pipefail
     echo "🚀 Starting Secret Manager Controller development environment (K3s)..."
@@ -59,7 +24,7 @@ dev-up-k3s:
         echo "   Please start Docker Desktop and try again"
         exit 1
     fi
-    
+
     # Check if k3s container exists
     if docker ps -a --filter "name=k3s-secret-manager-controller" --quiet | grep -q .; then
         echo "✅ K3s container 'k3s-secret-manager-controller' already exists"
@@ -73,17 +38,19 @@ dev-up-k3s:
             exit 1
         fi
     fi
-    
+
     # Set kubeconfig context
     kubectl config use-context k3s-secret-manager-controller 2>/dev/null || {
         echo "⚠️  Warning: Could not set k3s context, using current context"
     }
+
     
-    # Start Tilt with K3s Tiltfile
-    echo "🎯 Starting Tilt (K3s)..."
+    # Start Tilt
+    echo "🎯 Starting Tilt..."
     tilt up --file Tiltfile.k3s
 
-# Stop development environment
+
+# Stop development environment (K3s + Tilt)
 dev-down:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -93,75 +60,11 @@ dev-down:
     echo "Stopping Tilt..."
     pkill -f "tilt up" 2>/dev/null || true
     
-    # Delete Kind cluster
-    echo "🗑️ Deleting Kind cluster..."
-    kind delete cluster --name secret-manager-controller || true
-    
-    echo "✅ Development environment stopped"
-
-# Stop development environment (K3s)
-dev-down-k3s:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "🛑 Stopping Secret Manager Controller development environment (K3s)..."
-    
-    # Stop Tilt
-    echo "Stopping Tilt..."
-    pkill -f "tilt up" 2>/dev/null || true
-    
-    # Stop K3s container (but don't delete it)
+    # Stop K3s container
     echo "Stopping K3s container..."
     docker stop k3s-secret-manager-controller 2>/dev/null || true
     
-    echo "✅ Development environment stopped (K3s container preserved)"
-
-# Setup Kind cluster
-setup-kind:
-    @chmod +x scripts/setup-kind.sh
-    @./scripts/setup-kind.sh
-
-# Teardown Kind cluster
-teardown-kind:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "🗑️ Deleting Kind cluster..."
-    kind delete cluster --name secret-manager-controller || true
-    echo "🗑️ Stopping controller registry..."
-    docker stop secret-manager-controller-registry 2>/dev/null || true
-    echo "🗑️ Removing controller registry..."
-    docker rm secret-manager-controller-registry 2>/dev/null || true
-    echo "✅ Kind cluster and registry deleted"
-
-# Setup K3s cluster
-setup-k3s:
-    @chmod +x scripts/setup-k3s.sh
-    @./scripts/setup-k3s.sh
-
-# Teardown K3s cluster
-teardown-k3s:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "🗑️ Stopping K3s container..."
-    docker stop k3s-secret-manager-controller 2>/dev/null || true
-    echo "🗑️ Removing K3s container..."
-    docker rm k3s-secret-manager-controller 2>/dev/null || true
-    echo "🗑️ Removing K3s volumes..."
-    docker volume rm k3s-secret-manager-controller k3s-secret-manager-controller-config 2>/dev/null || true
-    echo "🗑️ Stopping controller registry..."
-    docker stop secret-manager-controller-registry 2>/dev/null || true
-    echo "🗑️ Removing controller registry..."
-    docker rm secret-manager-controller-registry 2>/dev/null || true
-    echo "✅ K3s cluster and registry deleted"
-
-# Start Tilt (assumes cluster is already running)
-up:
-    @echo "Starting Secret Manager Controller with Tilt..."
-    @tilt up
-
-# Stop Tilt
-down:
-    @tilt down
-
+    echo "✅ Development environment stopped"
 # ============================================================================
 # Building
 # ============================================================================
@@ -329,7 +232,6 @@ status:
     #!/usr/bin/env bash
     set -euo pipefail
     echo "📊 Cluster Status:"
-    kind get clusters || echo "No Kind clusters found"
     echo ""
     echo "📦 Controller Pods:"
     kubectl get pods -n microscaler-system -l app=secret-manager-controller 2>/dev/null || echo "No pods found"
@@ -365,23 +267,6 @@ check-deps:
     set -euo pipefail
     echo "Checking dependencies..."
     command -v docker >/dev/null 2>&1 || { echo "❌ docker is required but not installed."; exit 1; }
-    command -v kind >/dev/null 2>&1 || { echo "❌ kind is required but not installed."; exit 1; }
-    command -v kubectl >/dev/null 2>&1 || { echo "❌ kubectl is required but not installed."; exit 1; }
-    command -v cargo >/dev/null 2>&1 || { echo "❌ cargo (Rust) is required but not installed."; exit 1; }
-    command -v cargo-zigbuild >/dev/null 2>&1 || { echo "⚠️  cargo-zigbuild is recommended for cross-compilation. Install with: cargo install cargo-zigbuild"; }
-    command -v tilt >/dev/null 2>&1 || { echo "⚠️  tilt is recommended but not installed."; }
-    command -v just >/dev/null 2>&1 || { echo "⚠️  just is recommended but not installed."; }
-    echo "✅ All required dependencies are installed!"
-
-# Install development tools
-install-tools:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "Installing development tools..."
-    echo "Installing Kind..."
-    curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-$(uname -s | tr '[:upper:]' '[:lower:]')-amd64
-    chmod +x ./kind
-    sudo mv ./kind /usr/local/bin/kind || mv ./kind ~/.local/bin/kind
     echo "Installing Tilt..."
     curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash
     echo "Installing Just..."

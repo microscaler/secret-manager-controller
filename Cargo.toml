@@ -31,7 +31,7 @@ path = "src/cli.rs"
 
 [dependencies]
 # Kubernetes client
-kube = { version = "2.0", features = ["runtime", "derive"] }
+kube = { version = "2.0.0", features = ["runtime", "derive"] }
 kube-runtime = "2.0"
 k8s-openapi = { version = "0.26", default-features = false, features = ["v1_30"] }
 tokio = { version = "1", features = ["full"] }

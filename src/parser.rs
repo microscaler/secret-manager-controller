@@ -41,7 +41,7 @@ pub struct ApplicationFiles {
 /// Normalize base path - handle "." and "" as empty/root
 fn normalize_base_path(base_path: Option<&str>) -> Option<&str> {
     match base_path {
-        Some(".") | Some("") | None => None,
+        Some("." | "") | None => None,
         Some(path) => Some(path),
     }
 }
@@ -54,7 +54,8 @@ fn normalize_base_path(base_path: Option<&str>) -> Option<&str> {
 ///
 /// Only processes the specified environment name - does not scan all environments
 ///
-/// If base_path is None, searches from repository root
+/// If `base_path` is None, searches from repository root
+#[allow(clippy::unused_async)] // May be called from async contexts in the future
 pub async fn find_application_files(
     artifact_path: &Path,
     base_path: Option<&str>,
@@ -82,7 +83,7 @@ pub async fn find_application_files(
     // - Legacy: deployment-configuration/{env}/ (backward compatibility)
     for entry in WalkDir::new(&search_path)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
     {
         let path = entry.path();
 
@@ -90,8 +91,7 @@ pub async fn find_application_files(
         if path
             .file_name()
             .and_then(|n| n.to_str())
-            .map(|n| n == "deployment-configuration")
-            .unwrap_or(false)
+            .is_some_and(|n| n == "deployment-configuration")
         {
             // Extract service name (parent of deployment-configuration)
             let service_name = if let Some(parent) = path.parent() {
@@ -99,27 +99,27 @@ pub async fn find_application_files(
                 if parent == search_path {
                     // Single service: use default_service_name or fallback
                     default_service_name
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| {
+                        .map(ToString::to_string)
+                        .or_else(|| {
                             // Try to extract from artifact path or use default
                             artifact_path
                                 .file_name()
                                 .and_then(|n| n.to_str())
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| "default-service".to_string())
+                                .map(ToString::to_string)
                         })
+                        .unwrap_or_else(|| "default-service".to_string())
                 } else {
                     // Monolith: extract service name from parent directory
                     parent
                         .file_name()
                         .and_then(|n| n.to_str())
-                        .map(|s| s.to_string())
+                        .map(ToString::to_string)
                         .unwrap_or_else(|| "unknown".to_string())
                 }
             } else {
                 default_service_name
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "unknown".to_string())
+                    .map(ToString::to_string)
+                    .unwrap_or("unknown".to_string())
             };
 
             // Look for profiles directory first (Skaffold-compliant structure)
@@ -129,7 +129,7 @@ pub async fn find_application_files(
                 // Only process the specified environment
                 let env_path = profiles_path.join(environment);
                 if env_path.exists() && env_path.is_dir() {
-                    let app_files = find_files_in_directory(&service_name, &env_path).await?;
+                    let app_files = find_files_in_directory(&service_name, &env_path)?;
                     if app_files.has_any_files() {
                         application_files.push(app_files);
                     } else {
@@ -151,7 +151,7 @@ pub async fn find_application_files(
                 // Only process the specified environment
                 let env_path = path.join(environment);
                 if env_path.exists() && env_path.is_dir() {
-                    let app_files = find_files_in_directory(&service_name, &env_path).await?;
+                    let app_files = find_files_in_directory(&service_name, &env_path)?;
                     if app_files.has_any_files() {
                         application_files.push(app_files);
                     } else {
@@ -175,7 +175,7 @@ pub async fn find_application_files(
     Ok(application_files)
 }
 
-async fn find_files_in_directory(service_name: &str, dir: &Path) -> Result<ApplicationFiles> {
+fn find_files_in_directory(service_name: &str, dir: &Path) -> Result<ApplicationFiles> {
     let mut app_files = ApplicationFiles {
         service_name: service_name.to_string(),
         base_path: dir.to_path_buf(),
@@ -209,6 +209,7 @@ async fn find_files_in_directory(service_name: &str, dir: &Path) -> Result<Appli
 }
 
 impl ApplicationFiles {
+    #[must_use]
     pub fn has_any_files(&self) -> bool {
         self.secrets_env.is_some() || self.secrets_yaml.is_some() || self.properties.is_some()
     }
@@ -261,7 +262,6 @@ async fn parse_env_file(
     let content = if is_sops_encrypted(&content) {
         debug!("Detected SOPS-encrypted file: {}", path.display());
         decrypt_sops_content(&content, sops_private_key)
-            .await
             .context("Failed to decrypt SOPS file")?
     } else {
         content
@@ -300,7 +300,6 @@ async fn parse_yaml_secrets(
     let content = if is_sops_encrypted(&content) {
         debug!("Detected SOPS-encrypted file: {}", path.display());
         decrypt_sops_content(&content, sops_private_key)
-            .await
             .context("Failed to decrypt SOPS file")?
     } else {
         content
@@ -327,14 +326,14 @@ fn flatten_yaml_value(
                 let new_prefix = if prefix.is_empty() {
                     key_str
                 } else {
-                    format!("{}.{}", prefix, key_str)
+                    format!("{prefix}.{key_str}")
                 };
                 flatten_yaml_value(val, new_prefix, result);
             }
         }
         serde_yaml::Value::Sequence(seq) => {
             for (idx, val) in seq.iter().enumerate() {
-                let new_prefix = format!("{}[{}]", prefix, idx);
+                let new_prefix = format!("{prefix}[{idx}]");
                 flatten_yaml_value(val, new_prefix, result);
             }
         }
@@ -395,7 +394,7 @@ fn is_sops_encrypted(content: &str) -> bool {
     if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(content) {
         if yaml
             .as_mapping()
-            .and_then(|m| m.get(&serde_yaml::Value::String("sops".to_string())))
+            .and_then(|m| m.get(serde_yaml::Value::String("sops".to_string())))
             .is_some()
         {
             return true;
@@ -419,7 +418,7 @@ fn is_sops_encrypted(content: &str) -> bool {
 
 /// Decrypt SOPS-encrypted content using rops
 /// Note: This is a placeholder implementation. rops crate API may need adjustment.
-async fn decrypt_sops_content(_content: &str, sops_private_key: Option<&str>) -> Result<String> {
+fn decrypt_sops_content(_content: &str, sops_private_key: Option<&str>) -> Result<String> {
     // For now, we'll use a simplified approach:
     // If a private key is provided, we can attempt decryption
     // Otherwise, we'll need to rely on the sops binary or proper rops integration
@@ -433,10 +432,10 @@ async fn decrypt_sops_content(_content: &str, sops_private_key: Option<&str>) ->
         // Attempt decryption with provided key
         // This is a placeholder - actual implementation depends on rops API
         warn!("SOPS decryption with provided key is not yet fully implemented");
-        return Err(anyhow::anyhow!("SOPS decryption not yet implemented - please use unencrypted files or implement proper rops integration"));
+        Err(anyhow::anyhow!("SOPS decryption not yet implemented - please use unencrypted files or implement proper rops integration"))
     } else {
         // Try to use rops default keychain
         warn!("SOPS decryption without explicit key is not yet fully implemented");
-        return Err(anyhow::anyhow!("SOPS decryption not yet implemented - please use unencrypted files or provide private key"));
+        Err(anyhow::anyhow!("SOPS decryption not yet implemented - please use unencrypted files or provide private key"))
     }
 }

@@ -18,7 +18,7 @@ use prometheus::{Counter, Histogram, IntCounter, IntGauge, Registry};
 use std::sync::LazyLock;
 
 // Metrics
-pub(crate) static REGISTRY: LazyLock<Registry> = LazyLock::new(|| Registry::new());
+pub(crate) static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
 
 static RECONCILIATIONS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
     IntCounter::new(
@@ -116,11 +116,15 @@ pub fn observe_reconciliation_duration(duration: f64) {
 }
 
 pub fn increment_secrets_synced(count: i64) {
-    SECRETS_SYNCED_TOTAL.inc_by(count as u64);
+    #[allow(clippy::cast_sign_loss)] // We ensure non-negative with max(0)
+    let count_u64 = count.max(0) as u64;
+    SECRETS_SYNCED_TOTAL.inc_by(count_u64);
 }
 
 pub fn increment_secrets_updated(count: i64) {
-    SECRETS_UPDATED_TOTAL.inc_by(count as u64);
+    #[allow(clippy::cast_sign_loss)] // We ensure non-negative with max(0)
+    let count_u64 = count.max(0) as u64;
+    SECRETS_UPDATED_TOTAL.inc_by(count_u64);
 }
 
 pub fn set_secrets_managed(count: i64) {

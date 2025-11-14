@@ -193,7 +193,7 @@ async fn reconcile_command(
 
     if force {
         println!("🔄 Force reconciliation mode enabled");
-        println!("   Resource: {}/{}", ns, name);
+        println!("   Resource: {ns}/{name}");
         println!();
 
         // Step 1: Get the resource spec before deletion (for verification)
@@ -202,14 +202,12 @@ async fn reconcile_command(
 
         if !resource_exists {
             return Err(anyhow::anyhow!(
-                "Resource '{}/{}' does not exist. Cannot force reconcile.",
-                ns,
-                name
+                "Resource '{ns}/{name}' does not exist. Cannot force reconcile."
             ));
         }
 
         // Step 2: Delete the resource
-        println!("🗑️  Deleting SecretManagerConfig '{}/{}'...", ns, name);
+        println!("🗑️  Deleting SecretManagerConfig '{ns}/{name}'...");
         match api.delete(&name, &kube::api::DeleteParams::default()).await {
             Ok(_) => {
                 println!("   ✅ Resource deleted");
@@ -219,10 +217,7 @@ async fn reconcile_command(
             }
             Err(e) => {
                 return Err(anyhow::anyhow!(
-                    "Failed to delete resource '{}/{}': {}",
-                    ns,
-                    name,
-                    e
+                    "Failed to delete resource '{ns}/{name}': {e}"
                 ));
             }
         }
@@ -248,7 +243,7 @@ async fn reconcile_command(
                     // Resource exists - it's been recreated
                     recreated = true;
                     let gen = resource.metadata.generation.unwrap_or(0);
-                    println!("   ✅ Resource recreated (generation: {})", gen);
+                    println!("   ✅ Resource recreated (generation: {gen})");
                     break;
                 }
                 Err(kube::Error::Api(api_err)) if api_err.code == 404 => {
@@ -260,7 +255,7 @@ async fn reconcile_command(
                         .duration_since(last_log)
                         .unwrap_or(Duration::from_secs(0));
                     if elapsed_since_log > Duration::from_secs(10) {
-                        eprintln!("   ⚠️  Error checking resource: {}", e);
+                        eprintln!("   ⚠️  Error checking resource: {e}");
                         last_log = SystemTime::now();
                     }
                 }
@@ -281,10 +276,8 @@ async fn reconcile_command(
 
         if !recreated {
             return Err(anyhow::anyhow!(
-                "Timeout waiting for resource '{}/{}' to be recreated by GitOps. \
-                The resource may not be managed by GitOps, or the sync interval is too long.",
-                ns,
-                name
+                "Timeout waiting for resource '{ns}/{name}' to be recreated by GitOps. \
+                The resource may not be managed by GitOps, or the sync interval is too long."
             ));
         }
 
@@ -296,10 +289,7 @@ async fn reconcile_command(
 
     // Step 5: Trigger reconciliation
     println!();
-    println!(
-        "🔄 Triggering reconciliation for SecretManagerConfig '{}/{}'...",
-        ns, name
-    );
+    println!("🔄 Triggering reconciliation for SecretManagerConfig '{ns}/{name}'...");
 
     // Get current timestamp for annotation
     let timestamp = SystemTime::now()
@@ -322,11 +312,11 @@ async fn reconcile_command(
 
     api.patch(&name, &patch_params, &Patch::Merge(patch))
         .await
-        .with_context(|| format!("Failed to trigger reconciliation for '{}/{}'", ns, name))?;
+        .with_context(|| format!("Failed to trigger reconciliation for '{ns}/{name}'"))?;
 
     println!("✅ Reconciliation triggered successfully");
-    println!("   Resource: {}/{}", ns, name);
-    println!("   Timestamp: {}", timestamp);
+    println!("   Resource: {ns}/{name}");
+    println!("   Timestamp: {timestamp}");
 
     if force {
         println!();
@@ -342,10 +332,7 @@ async fn reconcile_command(
 /// List all SecretManagerConfig resources
 async fn list_command(client: Client, namespace: Option<String>) -> Result<()> {
     let api: Api<SecretManagerConfig> = if let Some(ns) = namespace {
-        println!(
-            "Listing SecretManagerConfig resources in namespace '{}'...",
-            ns
-        );
+        println!("Listing SecretManagerConfig resources in namespace '{ns}'...");
         Api::namespaced(client, &ns)
     } else {
         println!("Listing SecretManagerConfig resources in all namespaces...");
@@ -394,10 +381,7 @@ async fn list_command(client: Client, namespace: Option<String>) -> Result<()> {
             .map(|n| n.to_string())
             .unwrap_or_else(|| "-".to_string());
 
-        println!(
-            "{:<30} {:<20} {:<15} {:<15}",
-            name, ns, ready, secrets_synced
-        );
+        println!("{name:<30} {ns:<20} {ready:<15} {secrets_synced:<15}");
     }
 
     Ok(())
@@ -407,14 +391,14 @@ async fn list_command(client: Client, namespace: Option<String>) -> Result<()> {
 async fn status_command(client: Client, name: String, namespace: Option<String>) -> Result<()> {
     let ns = namespace.as_deref().unwrap_or("default");
 
-    println!("Status for SecretManagerConfig '{}/{}':\n", ns, name);
+    println!("Status for SecretManagerConfig '{ns}/{name}':\n");
 
     let api: Api<SecretManagerConfig> = Api::namespaced(client, ns);
 
     let config = api
         .get(&name)
         .await
-        .with_context(|| format!("Failed to get SecretManagerConfig '{}/{}'", ns, name))?;
+        .with_context(|| format!("Failed to get SecretManagerConfig '{ns}/{name}'"))?;
 
     // Print basic info
     println!("Metadata:");
@@ -427,7 +411,7 @@ async fn status_command(client: Client, name: String, namespace: Option<String>)
         config.metadata.namespace.as_deref().unwrap_or("<unknown>")
     );
     if let Some(gen) = config.metadata.generation {
-        println!("  Generation: {}", gen);
+        println!("  Generation: {gen}");
     }
 
     // Print spec
@@ -439,16 +423,16 @@ async fn status_command(client: Client, name: String, namespace: Option<String>)
         config.spec.source_ref.kind, config.spec.source_ref.name
     );
     if let Some(ref kustomize_path) = config.spec.kustomize_path {
-        println!("  Kustomize Path: {}", kustomize_path);
+        println!("  Kustomize Path: {kustomize_path}");
     }
     if let Some(ref base_path) = config.spec.base_path {
-        println!("  Base Path: {}", base_path);
+        println!("  Base Path: {base_path}");
     }
     if let Some(ref prefix) = config.spec.secret_prefix {
-        println!("  Secret Prefix: {}", prefix);
+        println!("  Secret Prefix: {prefix}");
     }
     if let Some(ref suffix) = config.spec.secret_suffix {
-        println!("  Secret Suffix: {}", suffix);
+        println!("  Secret Suffix: {suffix}");
     }
 
     // Print status
@@ -456,15 +440,15 @@ async fn status_command(client: Client, name: String, namespace: Option<String>)
         println!("\nStatus:");
 
         if let Some(gen) = status.observed_generation {
-            println!("  Observed Generation: {}", gen);
+            println!("  Observed Generation: {gen}");
         }
 
         if let Some(ref time) = status.last_reconcile_time {
-            println!("  Last Reconcile Time: {}", time);
+            println!("  Last Reconcile Time: {time}");
         }
 
         if let Some(count) = status.secrets_synced {
-            println!("  Secrets Synced: {}", count);
+            println!("  Secrets Synced: {count}");
         }
 
         if !status.conditions.is_empty() {
@@ -472,13 +456,13 @@ async fn status_command(client: Client, name: String, namespace: Option<String>)
             for condition in &status.conditions {
                 println!("  {}: {}", condition.r#type, condition.status);
                 if let Some(ref reason) = condition.reason {
-                    println!("    Reason: {}", reason);
+                    println!("    Reason: {reason}");
                 }
                 if let Some(ref message) = condition.message {
-                    println!("    Message: {}", message);
+                    println!("    Message: {message}");
                 }
                 if let Some(ref time) = condition.last_transition_time {
-                    println!("    Last Transition: {}", time);
+                    println!("    Last Transition: {time}");
                 }
             }
         }

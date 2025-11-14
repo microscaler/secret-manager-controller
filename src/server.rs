@@ -26,7 +26,7 @@ pub async fn start_server(port: u16, state: Arc<ServerState>) -> Result<(), anyh
         .route("/readyz", get(readyz_handler))
         .with_state(state);
 
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr).await?;
 
     info!("HTTP server listening on {}", addr);
@@ -51,7 +51,7 @@ async fn metrics_handler() -> impl IntoResponse {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             [("content-type", "text/plain")],
-            format!("Failed to encode metrics: {}", e).into_bytes(),
+            format!("Failed to encode metrics: {e}").into_bytes(),
         );
     }
 

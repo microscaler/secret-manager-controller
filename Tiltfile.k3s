@@ -1,10 +1,11 @@
 # Secret Manager Controller Tiltfile (K3s)
 # 
 # This Tiltfile:
-# 1. Generates CRD on changes to Rust code
-# 2. Builds the Rust binary
-# 3. Builds Docker image
-# 4. Deploys to Kubernetes using kustomize
+# 1. Runs code quality checks (fmt, clippy)
+# 2. Generates CRD on changes to Rust code
+# 3. Builds the Rust binary (after quality checks pass)
+# 4. Builds Docker image
+# 5. Deploys to Kubernetes using kustomize
 #
 # Usage: tilt up --file Tiltfile.k3s
 
@@ -22,6 +23,50 @@ CONTROLLER_NAME = 'secret-manager-controller'
 IMAGE_NAME = 'localhost:5002/secret-manager-controller'
 BINARY_NAME = 'secret-manager-controller'
 BINARY_PATH = '%s/target/x86_64-unknown-linux-musl/debug/%s' % (CONTROLLER_DIR, BINARY_NAME)
+
+# ====================
+# Code Quality Checks
+# ====================
+# Run formatting and linting checks
+
+local_resource(
+    'secret-manager-controller-fmt-check',
+    cmd='''
+        echo "🎨 Checking code formatting..."
+        cargo fmt --all -- --check || {
+            echo "❌ Formatting check failed. Run 'cargo fmt' to fix."
+            exit 1
+        }
+        echo "✅ Formatting check passed"
+    ''',
+    deps=[
+        '%s/src' % CONTROLLER_DIR,
+        '%s/Cargo.toml' % CONTROLLER_DIR,
+    ],
+    resource_deps=[],
+    labels=['code-quality'],
+    allow_parallel=True,
+)
+
+local_resource(
+    'secret-manager-controller-clippy',
+    cmd='''
+        echo "🔍 Running clippy (pedantic)..."
+        cargo clippy --all-targets --all-features -- -D warnings -W clippy::pedantic || {
+            echo "❌ Clippy check failed. Fix the warnings above."
+            exit 1
+        }
+        echo "✅ Clippy check passed"
+    ''',
+    deps=[
+        '%s/src' % CONTROLLER_DIR,
+        '%s/Cargo.toml' % CONTROLLER_DIR,
+        '%s/Cargo.lock' % CONTROLLER_DIR,
+    ],
+    resource_deps=[],
+    labels=['code-quality'],
+    allow_parallel=True,
+)
 
 # ====================
 # CRD Generation
@@ -62,9 +107,9 @@ local_resource(
         '%s/Cargo.toml' % CONTROLLER_DIR,
         '%s/Cargo.lock' % CONTROLLER_DIR,
     ],
-    resource_deps=[],
+    resource_deps=['secret-manager-controller-fmt-check', 'secret-manager-controller-clippy'],
     labels=['controllers'],
-    allow_parallel=True,
+    allow_parallel=False,
 )
 
 # ====================

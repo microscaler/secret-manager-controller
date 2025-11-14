@@ -23,7 +23,7 @@ pub struct SecretManager {
 }
 
 impl SecretManager {
-    /// Create a new SecretManager client with authentication
+    /// Create a new `SecretManager` client with authentication
     /// Supports both JSON credentials and Workload Identity
     ///
     /// Authentication is handled automatically by the Google Cloud SDK:
@@ -31,8 +31,12 @@ impl SecretManager {
     ///   with Workload Identity enabled and service account annotation
     ///
     /// Uses Workload Identity for authentication (DEFAULT, requires GKE with WI enabled)
-    /// If service_account_email is provided, uses that specific service account.
+    /// If `service_account_email` is provided, uses that specific service account.
     /// Otherwise, uses the service account from pod annotation.
+    ///
+    /// # Errors
+    /// Returns an error if GCP client initialization fails
+    #[allow(clippy::missing_errors_doc)]
     pub async fn new(
         _project_id: String,
         _auth_type: Option<&str>,
@@ -57,10 +61,10 @@ impl SecretManager {
         // The google-cloud-auth crate will automatically detect Workload Identity or JSON credentials
         // from the environment (GOOGLE_APPLICATION_CREDENTIALS or metadata server)
         // TODO: Implement actual client creation when SDK API is available
-        return Err(anyhow::anyhow!(
+        Err(anyhow::anyhow!(
             "SecretManagerService client creation needs to be implemented with correct SDK API. \
             Please check google-cloud-secretmanager-v1 documentation for client initialization."
-        ));
+        ))
 
         // Placeholder return (unreachable)
         // Ok(Self {
@@ -99,6 +103,7 @@ impl SecretManager {
     }
 
     #[allow(dead_code)] // May be used in future implementations
+    #[allow(clippy::unused_async)] // Trait requires async signature
     async fn create_secret(&self, _project_id: &str, _secret_name: &str) -> Result<()> {
         Err(anyhow::anyhow!(
             "Not implemented - waiting for correct SDK API"
@@ -106,6 +111,7 @@ impl SecretManager {
     }
 
     #[allow(dead_code)] // May be used in future implementations
+    #[allow(clippy::unused_async)] // Trait requires async signature
     async fn add_secret_version(&self, _secret_name: &str, _secret_value: &str) -> Result<()> {
         Err(anyhow::anyhow!(
             "Not implemented - waiting for correct SDK API"
@@ -186,9 +192,7 @@ impl SecretManagerProvider for SecretManager {
                     Ok(None)
                 } else {
                     Err(anyhow::anyhow!(
-                        "Failed to get GCP secret {}: {}",
-                        secret_name,
-                        e
+                        "Failed to get GCP secret {secret_name}: {e}"
                     ))
                 }
             }
@@ -211,8 +215,7 @@ impl SecretManagerProvider for SecretManager {
             .with_request(request_for_send)
             .send()
             .await
-            .map(|_| ())
-            .context(format!("Failed to delete GCP secret: {}", secret_name))?;
+            .context(format!("Failed to delete GCP secret: {secret_name}"))?;
 
         Ok(())
     }

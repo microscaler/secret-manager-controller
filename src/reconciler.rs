@@ -186,7 +186,7 @@ impl Reconciler {
                             .or_else(|| data_map.get("gpg-key"))
                         {
                             let key = String::from_utf8(data.0.clone()).map_err(|e| {
-                                anyhow::anyhow!("Failed to decode private key: {}", e)
+                                anyhow::anyhow!("Failed to decode private key: {e}")
                             })?;
                             info!("Loaded SOPS private key from secret: {}", secret_name);
                             return Ok(Some(key));
@@ -194,7 +194,7 @@ impl Reconciler {
                     }
                 }
                 Err(kube::Error::Api(api_err)) if api_err.code == 404 => {
-                    continue; // Try next secret name
+                    // Try next secret name
                 }
                 Err(e) => {
                     warn!("Failed to get secret {}: {}", secret_name, e);
@@ -249,11 +249,11 @@ impl Reconciler {
                     Err(e) => {
                         error!("Failed to get FluxCD GitRepository: {}", e);
                         metrics::increment_reconciliation_errors();
-                        return Err(ReconcilerError::ReconciliationFailed(e.into()));
+                        return Err(ReconcilerError::ReconciliationFailed(e));
                     }
                 };
 
-                match Reconciler::get_flux_artifact_path(&ctx, &git_repo).await {
+                match Reconciler::get_flux_artifact_path(&ctx, &git_repo) {
                     Ok(path) => {
                         info!(
                             "Found FluxCD artifact path: {} for GitRepository: {}",
@@ -265,7 +265,7 @@ impl Reconciler {
                     Err(e) => {
                         error!("Failed to get FluxCD artifact path: {}", e);
                         metrics::increment_reconciliation_errors();
-                        return Err(ReconcilerError::ReconciliationFailed(e.into()));
+                        return Err(ReconcilerError::ReconciliationFailed(e));
                     }
                 }
             }
@@ -283,17 +283,17 @@ impl Reconciler {
                     Err(e) => {
                         error!("Failed to get ArgoCD artifact path: {}", e);
                         metrics::increment_reconciliation_errors();
-                        return Err(ReconcilerError::ReconciliationFailed(e.into()));
+                        return Err(ReconcilerError::ReconciliationFailed(e));
                     }
                 }
             }
             _ => {
                 error!("Unsupported source kind: {}", config.spec.source_ref.kind);
                 metrics::increment_reconciliation_errors();
-                return Err(ReconcilerError::ReconciliationFailed(
-                    anyhow::anyhow!("Unsupported source kind: {}", config.spec.source_ref.kind)
-                        .into(),
-                ));
+                return Err(ReconcilerError::ReconciliationFailed(anyhow::anyhow!(
+                    "Unsupported source kind: {}",
+                    config.spec.source_ref.kind
+                )));
             }
         };
 
@@ -359,9 +359,7 @@ impl Reconciler {
             // This supports overlays, patches, and generators
             info!("Using kustomize build mode on path: {}", kustomize_path);
 
-            match crate::kustomize::extract_secrets_from_kustomize(&artifact_path, kustomize_path)
-                .await
-            {
+            match crate::kustomize::extract_secrets_from_kustomize(&artifact_path, kustomize_path) {
                 Ok(secrets) => {
                     let secret_prefix = config.spec.secrets.prefix.as_deref().unwrap_or("default");
                     match ctx
@@ -375,14 +373,14 @@ impl Reconciler {
                         Err(e) => {
                             error!("Failed to process kustomize secrets: {}", e);
                             metrics::increment_reconciliation_errors();
-                            return Err(ReconcilerError::ReconciliationFailed(e.into()));
+                            return Err(ReconcilerError::ReconciliationFailed(e));
                         }
                     }
                 }
                 Err(e) => {
                     error!("Failed to extract secrets from kustomize build: {}", e);
                     metrics::increment_reconciliation_errors();
-                    return Err(ReconcilerError::ReconciliationFailed(e.into()));
+                    return Err(ReconcilerError::ReconciliationFailed(e));
                 }
             }
         } else {
@@ -407,7 +405,7 @@ impl Reconciler {
                         config.spec.secrets.environment, e
                     );
                     metrics::increment_reconciliation_errors();
-                    return Err(ReconcilerError::ReconciliationFailed(e.into()));
+                    return Err(ReconcilerError::ReconciliationFailed(e));
                 }
             };
 
@@ -434,7 +432,7 @@ impl Reconciler {
         if let Err(e) = ctx.update_status(&config, secrets_synced).await {
             error!("Failed to update status: {}", e);
             metrics::increment_reconciliation_errors();
-            return Err(ReconcilerError::ReconciliationFailed(e.into()));
+            return Err(ReconcilerError::ReconciliationFailed(e));
         }
 
         // Update metrics
@@ -473,7 +471,7 @@ impl Reconciler {
     }
 
     /// Get artifact path from FluxCD GitRepository status
-    async fn get_flux_artifact_path(&self, git_repo: &serde_json::Value) -> Result<PathBuf> {
+    fn get_flux_artifact_path(&self, git_repo: &serde_json::Value) -> Result<PathBuf> {
         // Extract artifact path from GitRepository status
         // Flux stores artifacts at: /tmp/flux-source-<namespace>-<name>-<revision>
         // We can also get it from status.artifact.url or status.artifact.path
@@ -504,7 +502,7 @@ impl Reconciler {
             .context("FluxCD GitRepository has no namespace")?;
 
         // Default Flux artifact path
-        let default_path = format!("/tmp/flux-source-{}-{}", namespace, name);
+        let default_path = format!("/tmp/flux-source-{namespace}-{name}");
         warn!("Using default FluxCD artifact path: {}", default_path);
         Ok(PathBuf::from(default_path))
     }
@@ -526,13 +524,13 @@ impl Reconciler {
         let api: kube::Api<DynamicObject> =
             kube::Api::namespaced_with(self.client.clone(), &source_ref.namespace, &ar);
 
-        let app = api.get(&source_ref.name).await.context(format!(
+        let application = api.get(&source_ref.name).await.context(format!(
             "Failed to get ArgoCD Application: {}/{}",
             source_ref.namespace, source_ref.name
         ))?;
 
         // Extract Git source from Application spec
-        let spec = app
+        let spec = application
             .data
             .get("spec")
             .context("ArgoCD Application has no spec")?;
@@ -565,7 +563,7 @@ impl Reconciler {
                 source_ref.namespace, source_ref.name, target_revision
             ))
         );
-        let clone_path = format!("/tmp/argocd-repo-{}", repo_hash);
+        let clone_path = format!("/tmp/argocd-repo-{repo_hash}");
         let path_buf = PathBuf::from(&clone_path);
 
         // Check if repository already exists and is at the correct revision
@@ -639,7 +637,7 @@ impl Reconciler {
             .arg(&clone_path)
             .output()
             .await
-            .context(format!("Failed to execute git clone for {}", repo_url))?;
+            .context(format!("Failed to execute git clone for {repo_url}"))?;
 
         if !clone_output.status.success() {
             // If branch clone fails, clone default branch and checkout specific revision
@@ -652,14 +650,12 @@ impl Reconciler {
                 .arg(&clone_path)
                 .output()
                 .await
-                .context(format!("Failed to execute git clone for {}", repo_url))?;
+                .context(format!("Failed to execute git clone for {repo_url}"))?;
 
             if !clone_output.status.success() {
                 let error_msg = String::from_utf8_lossy(&clone_output.stderr);
                 return Err(anyhow::anyhow!(
-                    "Failed to clone repository {}: {}",
-                    repo_url,
-                    error_msg
+                    "Failed to clone repository {repo_url}: {error_msg}"
                 ));
             }
 
@@ -684,17 +680,13 @@ impl Reconciler {
                 .output()
                 .await
                 .context(format!(
-                    "Failed to checkout revision {} in repository {}",
-                    target_revision, repo_url
+                    "Failed to checkout revision {target_revision} in repository {repo_url}"
                 ))?;
 
             if !checkout_output.status.success() {
                 let error_msg = String::from_utf8_lossy(&checkout_output.stderr);
                 return Err(anyhow::anyhow!(
-                    "Failed to checkout revision {} in repository {}: {}",
-                    target_revision,
-                    repo_url,
-                    error_msg
+                    "Failed to checkout revision {target_revision} in repository {repo_url}: {error_msg}"
                 ));
             }
         }
@@ -720,8 +712,8 @@ impl Reconciler {
             .unwrap_or(&app_files.service_name);
 
         // Parse secrets from files (with SOPS decryption if needed)
-        let secrets = parser::parse_secrets(&app_files, self.sops_private_key.as_deref()).await?;
-        let properties = parser::parse_properties(&app_files).await?;
+        let secrets = parser::parse_secrets(app_files, self.sops_private_key.as_deref()).await?;
+        let properties = parser::parse_properties(app_files).await?;
 
         // Store secrets in cloud provider (GitOps: Git is source of truth)
         let mut count = 0;
@@ -746,7 +738,7 @@ impl Reconciler {
                 }
                 Err(e) => {
                     error!("Failed to store secret {}: {}", secret_name, e);
-                    return Err(e.context(format!("Failed to store secret: {}", secret_name)));
+                    return Err(e.context(format!("Failed to store secret: {secret_name}")));
                 }
             }
         }
@@ -819,7 +811,7 @@ impl Reconciler {
                 }
                 Err(e) => {
                     error!("Failed to store secret {}: {}", secret_name, e);
-                    return Err(e.context(format!("Failed to store secret: {}", secret_name)));
+                    return Err(e.context(format!("Failed to store secret: {secret_name}")));
                 }
             }
         }
@@ -850,7 +842,7 @@ impl Reconciler {
                 status: "True".to_string(),
                 last_transition_time: Some(chrono::Utc::now().to_rfc3339()),
                 reason: Some("ReconciliationSucceeded".to_string()),
-                message: Some(format!("Synced {} secrets", secrets_synced)),
+                message: Some(format!("Synced {secrets_synced} secrets")),
             }],
             observed_generation: config.metadata.generation,
             last_reconcile_time: Some(chrono::Utc::now().to_rfc3339()),

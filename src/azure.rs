@@ -27,6 +27,9 @@ pub struct AzureKeyVault {
 impl AzureKeyVault {
     /// Create a new Azure Key Vault client
     /// Supports both Service Principal and Workload Identity
+    /// # Errors
+    /// Returns an error if Azure client initialization fails
+    #[allow(clippy::missing_errors_doc)]
     pub async fn new(config: &AzureConfig, _k8s_client: &kube::Client) -> Result<Self> {
         // Construct vault URL from vault name
         // Format: https://{vault-name}.vault.azure.net/
@@ -45,8 +48,10 @@ impl AzureKeyVault {
                     client_id
                 );
                 info!("Ensure pod service account has Azure Workload Identity configured");
-                let mut options = azure_identity::WorkloadIdentityCredentialOptions::default();
-                options.client_id = Some(client_id.clone());
+                let options = azure_identity::WorkloadIdentityCredentialOptions {
+                    client_id: Some(client_id.clone()),
+                    ..Default::default()
+                };
                 WorkloadIdentityCredential::new(Some(options))
                     .context("Failed to create WorkloadIdentityCredential")?
             }
@@ -92,14 +97,15 @@ impl SecretManagerProvider for AzureKeyVault {
         // Create or update secret
         // Azure Key Vault automatically creates a new version when updating
         info!("Creating/updating Azure secret: {}", secret_name);
-        let mut parameters = SetSecretParameters::default();
-        parameters.value = Some(secret_value.to_string());
+        let parameters = SetSecretParameters {
+            value: Some(secret_value.to_string()),
+            ..Default::default()
+        };
         self.client
             .set_secret(secret_name, parameters.try_into()?, None)
             .await
             .context(format!(
-                "Failed to create/update Azure secret: {}",
-                secret_name
+                "Failed to create/update Azure secret: {secret_name}"
             ))?;
 
         metrics::record_secret_operation("azure", "update", start.elapsed().as_secs_f64());
@@ -127,7 +133,7 @@ impl SecretManagerProvider for AzureKeyVault {
                 {
                     Ok(None)
                 } else {
-                    Err(anyhow::anyhow!("Failed to get Azure secret: {}", e))
+                    Err(anyhow::anyhow!("Failed to get Azure secret: {e}"))
                 }
             }
         }
@@ -138,7 +144,7 @@ impl SecretManagerProvider for AzureKeyVault {
         self.client
             .delete_secret(secret_name, None)
             .await
-            .context(format!("Failed to delete Azure secret: {}", secret_name))?;
+            .context(format!("Failed to delete Azure secret: {secret_name}"))?;
         Ok(())
     }
 }
@@ -213,9 +219,8 @@ mod tests {
 
         for name in valid_names {
             assert!(
-                name.len() >= 1 && name.len() <= 127,
-                "Secret name {} should be valid",
-                name
+                !name.is_empty() && name.len() <= 127,
+                "Secret name {name} should be valid"
             );
         }
     }

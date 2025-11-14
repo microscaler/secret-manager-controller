@@ -9,7 +9,7 @@
 //! ## Features
 //!
 //! - **Full Kustomize support**: Handles overlays, patches, and generators
-//! - **GitOps-agnostic**: Works with any GitOps tool (FluxCD, ArgoCD, etc.)
+//! - **GitOps-agnostic**: Works with any GitOps tool (`FluxCD`, `ArgoCD`, etc.)
 //! - **Secret extraction**: Parses Kubernetes Secret resources from kustomize output
 //! - **Base64 decoding**: Automatically decodes base64-encoded secret values
 //!
@@ -37,7 +37,7 @@ use std::process::Command;
 use tracing::{debug, error, info, warn};
 
 /// Run kustomize build on the specified path and extract secrets from Secret resources
-pub async fn extract_secrets_from_kustomize(
+pub fn extract_secrets_from_kustomize(
     artifact_path: &Path,
     kustomize_path: &str,
 ) -> Result<HashMap<String, String>> {
@@ -73,7 +73,7 @@ pub async fn extract_secrets_from_kustomize(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         error!("Kustomize build failed: {}", stderr);
-        return Err(anyhow::anyhow!("Kustomize build failed: {}", stderr));
+        return Err(anyhow::anyhow!("Kustomize build failed: {stderr}"));
     }
 
     let yaml_output =
@@ -82,20 +82,20 @@ pub async fn extract_secrets_from_kustomize(
     debug!("Kustomize build succeeded, parsing output...");
 
     // Parse YAML stream (multiple resources separated by ---)
-    let secrets = parse_kustomize_output(&yaml_output)?;
+    let secrets = parse_kustomize_output(&yaml_output);
 
     info!("Extracted {} secrets from kustomize output", secrets.len());
     Ok(secrets)
 }
 
 /// Parse kustomize build output and extract secrets from Secret resources
-fn parse_kustomize_output(yaml_output: &str) -> Result<HashMap<String, String>> {
+fn parse_kustomize_output(yaml_output: &str) -> HashMap<String, String> {
     let mut all_secrets = HashMap::new();
 
     // Split YAML stream by --- separator
     let documents: Vec<&str> = yaml_output
         .split("---")
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
 
@@ -105,7 +105,7 @@ fn parse_kustomize_output(yaml_output: &str) -> Result<HashMap<String, String>> 
             Ok(secret) => {
                 // Extract secret data
                 if let Some(data) = &secret.data {
-                    for (key, value) in data.iter() {
+                    for (key, value) in data {
                         // Decode base64 value
                         use base64::{engine::general_purpose, Engine as _};
                         match general_purpose::STANDARD.decode(&value.0) {
@@ -134,11 +134,11 @@ fn parse_kustomize_output(yaml_output: &str) -> Result<HashMap<String, String>> 
         }
     }
 
-    Ok(all_secrets)
+    all_secrets
 }
 
-/// Extract properties from kustomize output (from ConfigMap resources)
-pub async fn extract_properties_from_kustomize(
+/// Extract properties from kustomize output (from `ConfigMap` resources)
+pub fn extract_properties_from_kustomize(
     artifact_path: &Path,
     kustomize_path: &str,
 ) -> Result<HashMap<String, String>> {
@@ -170,7 +170,7 @@ pub async fn extract_properties_from_kustomize(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         error!("Kustomize build failed: {}", stderr);
-        return Err(anyhow::anyhow!("Kustomize build failed: {}", stderr));
+        return Err(anyhow::anyhow!("Kustomize build failed: {stderr}"));
     }
 
     let yaml_output =
@@ -181,7 +181,7 @@ pub async fn extract_properties_from_kustomize(
     // Split YAML stream by --- separator
     let documents: Vec<&str> = yaml_output
         .split("---")
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
 

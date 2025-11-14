@@ -256,10 +256,10 @@ fn main() {
     // Serialize to YAML
     match serde_yaml::to_string(&crd) {
         Ok(yaml) => {
-            print!("{}", yaml);
+            print!("{yaml}");
         }
         Err(e) => {
-            eprintln!("Failed to serialize CRD to YAML: {}", e);
+            eprintln!("Failed to serialize CRD to YAML: {e}");
             std::process::exit(1);
         }
     }

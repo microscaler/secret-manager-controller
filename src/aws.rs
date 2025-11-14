@@ -148,13 +148,11 @@ impl SecretManagerProvider for AwsSecretManager {
             .await
         {
             Ok(response) => {
-                let value = if let Some(s) = response.secret_string() {
-                    Some(s.to_string())
-                } else if let Some(blob) = response.secret_binary() {
-                    Some(String::from_utf8_lossy(blob.as_ref()).to_string())
-                } else {
-                    None
-                };
+                let value = response.secret_string().map(ToString::to_string).or_else(|| {
+                    response
+                        .secret_binary()
+                        .map(|blob| String::from_utf8_lossy(blob.as_ref()).to_string())
+                });
 
                 match value {
                     Some(v) => Ok(Some(v)),
@@ -165,7 +163,7 @@ impl SecretManagerProvider for AwsSecretManager {
                 if e.to_string().contains("ResourceNotFoundException") {
                     Ok(None)
                 } else {
-                    Err(anyhow::anyhow!("Failed to get AWS secret: {}", e))
+                    Err(anyhow::anyhow!("Failed to get AWS secret: {e}"))
                 }
             }
         }
@@ -231,9 +229,8 @@ mod tests {
 
         for name in valid_names {
             assert!(
-                name.len() >= 1 && name.len() <= 512,
-                "Secret name {} should be valid",
-                name
+                !name.is_empty() && name.len() <= 512,
+                "Secret name {name} should be valid"
             );
         }
     }

@@ -18,6 +18,36 @@ This controller:
    - **Azure Key Vault** - For AKS clusters
 6. **Workload Identity Support** - Uses Workload Identity/IRSA by default for secure authentication without storing credentials
 
+## Problem Statement
+
+### Why Do We Need This Tool?
+
+**The Problem:**
+
+1. **Secrets can't be stored in Git unless encrypted** - Storing plaintext secrets in version control is a security risk. Secrets must be encrypted (e.g., using SOPS) before being committed to Git repositories.
+
+2. **Services can't use SOPS secrets directly** - While SOPS-encrypted secrets can be safely stored in Git, services running in cloud environments (GKE, EKS, AKS) cannot directly consume SOPS-encrypted files. They need secrets in a format that their cloud provider's secret management system can provide.
+
+**The Solution:**
+
+A Kubernetes controller that:
+- Runs in Kubernetes and reconciles secrets using a GitOps loop
+- Reads SOPS-encrypted secrets from Git repositories (via FluxCD or ArgoCD)
+- Decrypts secrets using GPG keys stored in Kubernetes secrets
+- Publishes decrypted secrets to cloud provider secret management systems (GCP Secret Manager, AWS Secrets Manager, Azure Key Vault)
+- Enables services to consume secrets using standard `secretRef` patterns native to their cloud platform
+
+**Key Benefits:**
+
+- **Service-agnostic of CI/CD** - Services don't need to know about SOPS, GitOps, or encryption. They simply reference secrets using standard cloud provider mechanisms.
+- **GitOps-driven** - Secrets are managed in Git with full version control, audit trail, and pull request workflows.
+- **Cloud-native** - Services consume secrets through their cloud provider's native secret management APIs (e.g., GCP Secret Manager, AWS Secrets Manager).
+- **Kubernetes-native** - Controller runs in Kubernetes, leveraging existing cluster infrastructure and RBAC.
+
+**Trade-offs:**
+
+- **Requires Kubernetes** - The controller must run in a Kubernetes cluster. This is a disadvantage for infrastructures that are heavily serverless-focused without Kubernetes infrastructure.
+
 ## Architecture
 
 ```mermaid
@@ -239,11 +269,11 @@ spec:
 ```
 
 **Important:** 
-- The `secrets.environment` field is **required** and must exactly match the directory name under `profiles/`. This allows the controller to explicitly sync a specific environment rather than scanning all environments. This is especially useful for projects using Skaffold with custom environment names like `dev-cf`, `pp-cf`, `prod-cf`.
+- The `secrets.environment` field is **required** and must exactly match the directory name under `profiles/`. This allows the controller to explicitly sync a specific environment rather than scanning all environments. This is especially useful for projects using Skaffold with custom environment names like `dev`, `pp`, `prod`.
 - **Kustomize Build Mode** (when `secrets.kustomizePath` is specified): The controller runs `kustomize build` and extracts secrets from the generated Kubernetes Secret resources. This ensures overlays, patches, and generator modifications are included. Works with any GitOps tool (FluxCD, ArgoCD, etc.).
 - **Raw File Mode** (when `secrets.kustomizePath` is not specified): The controller reads `application.secrets.env` files directly. Simpler but doesn't support kustomize overlays/patches.
 
-## Directory Structure
+### Directory Structure
 
 The controller expects the following structure (matching Flux kustomize):
 
@@ -266,7 +296,7 @@ graph TD
     style Properties fill:#e1f5ff
 ```
 
-## Secret Naming
+### Secret Naming
 
 Secrets in cloud secret managers are named using the same convention as `kustomize-google-secret-manager` for drop-in replacement compatibility:
 
@@ -286,332 +316,6 @@ Examples:
 - With prefix only: `my-service-database-url`, `my-service-api-key`
 - With prefix and suffix: `my-service-database-url-prod`, `my-service-api-key-prod`
 - Properties secret: `my-service-properties` or `my-service-properties-prod`
-
-## Usage with Cloud Services
-
-After secrets are synced to cloud secret managers, reference them in your cloud services:
-
-### Google Cloud Platform (GCP) - CloudRun
-
-Use the [Upbound GCP CloudRun Provider](https://marketplace.upbound.io/providers/upbound/provider-gcp-cloudrun/v2.2.0) to reference secrets:
-
-```yaml
-apiVersion: cloudrun.gcp.upbound.io/v1beta1
-kind: Service
-metadata:
-  name: my-service
-spec:
-  forProvider:
-    template:
-      spec:
-        containers:
-        - image: gcr.io/my-project/my-service:latest
-          env:
-          - name: DATABASE_URL
-            valueFrom:
-              secretKeyRef:
-                name: my-service-database-url
-                key: latest
-```
-
-### Amazon Web Services (AWS) - ECS/EKS
-
-Reference secrets from AWS Secrets Manager in your ECS tasks or EKS pods:
-
-```yaml
-# ECS Task Definition
-apiVersion: ecs.aws.upbound.io/v1beta1
-kind: TaskDefinition
-metadata:
-  name: my-service
-spec:
-  forProvider:
-    containerDefinitions: |
-      [
-        {
-          "name": "my-service",
-          "image": "my-registry/my-service:latest",
-          "secrets": [
-            {
-              "name": "DATABASE_URL",
-              "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:my-service-database-url"
-            }
-          ]
-        }
-      ]
-```
-
-### Microsoft Azure - AKS/Container Apps
-
-Reference secrets from Azure Key Vault in your AKS pods or Container Apps:
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: my-service
-spec:
-  containers:
-  - name: my-service
-    image: my-registry/my-service:latest
-    env:
-    - name: DATABASE_URL
-      valueFrom:
-        secretKeyRef:
-          name: azure-keyvault-secret-my-service-database-url
-          key: value
-```
-
-**Note:** For Azure, you'll typically use the [External Secrets Operator](https://external-secrets.io/) or [Secrets Store CSI Driver](https://secrets-store-csi-driver.sigs.k8s.io/) to sync Azure Key Vault secrets to Kubernetes secrets.
-
-## Development
-
-### Prerequisites
-
-- Rust 1.75+
-- Docker and Docker Compose
-- `kind` (Kubernetes in Docker) - for local cluster
-- `kubectl` - Kubernetes CLI
-- `tilt` - for local development (optional but recommended)
-- Kubernetes cluster with FluxCD or ArgoCD installed (for production)
-- Cloud provider credentials configured (GCP/AWS/Azure)
-- **For Kustomize Build Mode**: `kustomize` binary must be available in the controller container (v5.0+)
-- **For ArgoCD support**: `git` binary must be available in the controller container (v2.0+)
-- **For cross-compilation to Linux musl**: `cargo-zigbuild` (recommended) or OpenSSL development libraries configured manually
-  - Install with: `cargo install cargo-zigbuild`
-
-### Local Development with Kind Cluster
-
-The controller includes an independent kind cluster configuration for standalone development and testing. The project uses [`just`](https://github.com/casey/just) as a command runner for common development tasks.
-
-#### Quick Start
-
-1. **Check dependencies:**
-   ```bash
-   just check-deps
-   ```
-
-2. **Setup Kind cluster:**
-   ```bash
-   just setup-kind
-   ```
-
-   This will:
-   - Create a local Docker registry (`kind-registry`) if it doesn't exist
-   - Create a kind cluster named `secret-manager-controller`
-   - Configure the cluster to use the local registry
-   - Configure pod and service IP ranges (pods get their own IPs, no host port conflicts)
-
-3. **Start development environment:**
-   ```bash
-   just dev-up
-   ```
-
-   This will:
-   - Create the kind cluster (if not already created)
-   - Start Tilt for hot-reload development
-   - Generate the CRD when Rust code changes
-   - Build the Rust binary
-   - Build the Docker image and push to local registry
-   - Deploy to the kind cluster
-   - Watch for changes and automatically rebuild/redeploy
-
-4. **Access the Tilt UI:**
-   - Open http://localhost:10350 in your browser
-   - Monitor build logs, deployment status, and resource health
-
-5. **Access controller metrics:**
-   ```bash
-   # Port forward to access metrics endpoint (in a separate terminal)
-   just port-forward
-   # OR manually:
-   kubectl port-forward -n microscaler-system svc/secret-manager-controller-metrics 5000:5000
-   ```
-   Then access:
-   - Metrics: http://localhost:5000/metrics
-   - Health: http://localhost:5000/healthz
-   - Ready: http://localhost:5000/readyz
-
-   **Note:** Kubernetes pods get their own IP addresses (configured via `podSubnet`), so there are no host port conflicts. Access is via `kubectl port-forward` or Service types (ClusterIP/NodePort/LoadBalancer).
-
-#### Common Commands
-
-View all available commands:
-```bash
-just --list
-```
-
-**Development:**
-- `just dev-up` - Start development environment (Kind + Tilt)
-- `just dev-down` - Stop development environment
-- `just up` - Start Tilt (assumes cluster is running)
-- `just down` - Stop Tilt
-
-**Building:**
-- `just build` - Build Rust binary and Docker image
-- `just build-rust` - Build Rust binary (debug)
-- `just build-release` - Build Rust binary (release)
-- `just build-linux` - Build for Linux (musl target) - Uses `cargo-zigbuild` for OpenSSL cross-compilation
-- `just build-linux-release` - Build for Linux (musl target, release)
-- `just generate-crd` - Generate CRD from Rust code
-
-**Testing:**
-- `just test` - Run all tests (unit + pact)
-- `just test-unit` - Run unit tests
-- `just test-pact` - Run Pact contract tests
-- `just test-pact-gcp` - Run GCP Pact tests
-- `just test-pact-aws` - Run AWS Pact tests
-- `just test-pact-azure` - Run Azure Pact tests
-
-**Code Quality:**
-- `just fmt` - Format code
-- `just lint` - Lint code
-- `just check` - Check code (compile without building)
-- `just validate` - Run all validations (fmt, lint, check, tests)
-
-**Deployment:**
-- `just deploy` - Deploy to Kubernetes
-- `just deploy-crd` - Deploy CRD only
-- `just status` - Show cluster and controller status
-- `just logs` - Show controller logs
-
-**CLI Tool:**
-- `just build-cli` - Build msmctl CLI tool
-- `just install-cli` - Install msmctl to ~/.local/bin
-- `just cli <args>` - Run CLI tool (development mode)
-
-#### Manual Setup (without just)
-
-If you prefer not to use `just`, you can use the scripts directly:
-
-1. **Create the kind cluster:**
-   ```bash
-   ./scripts/setup-kind.sh
-   ```
-
-2. **Verify the cluster is running:**
-   ```bash
-   kubectl cluster-info --context kind-secret-manager-controller
-   ```
-
-3. **Start Tilt:**
-   ```bash
-   tilt up
-   ```
-
-#### Cleanup
-
-To stop and clean up everything:
-```bash
-just dev-down
-```
-
-Or manually:
-```bash
-# Stop Tilt
-tilt down
-
-# Delete kind cluster
-just teardown-kind
-# OR
-kind delete cluster --name secret-manager-controller
-
-# Remove local registry (optional)
-docker stop kind-registry
-docker rm kind-registry
-```
-
-### Build
-
-#### Native Build
-
-```bash
-cargo build --release
-```
-
-#### Cross-Compilation for Linux (musl)
-
-The controller uses the Google Cloud SDK crates which depend on `reqwest` with OpenSSL support. For cross-compilation to `x86_64-unknown-linux-musl`, you need to handle OpenSSL dependencies.
-
-**Recommended: Use `cargo-zigbuild`**
-
-The easiest way to cross-compile is using `cargo-zigbuild`, which automatically handles OpenSSL compilation for musl targets:
-
-```bash
-# Install cargo-zigbuild (if not already installed)
-cargo install cargo-zigbuild
-
-# Build for Linux musl target
-cargo zigbuild --release --target x86_64-unknown-linux-musl
-
-# Or use the justfile command
-just build-linux-release
-```
-
-**Alternative: Manual OpenSSL Configuration**
-
-If you prefer not to use `cargo-zigbuild`, you can configure OpenSSL manually:
-
-1. **Install OpenSSL development libraries:**
-   - **macOS (Homebrew):**
-     ```bash
-     brew install openssl@3
-     export OPENSSL_DIR=$(brew --prefix openssl@3)
-     ```
-   - **Ubuntu/Debian:**
-     ```bash
-     sudo apt-get install libssl-dev pkg-config
-     ```
-   - **Fedora:**
-     ```bash
-     sudo dnf install openssl-devel pkg-config
-     ```
-
-2. **Set environment variables for cross-compilation:**
-   ```bash
-   # macOS example
-   export OPENSSL_DIR=/opt/homebrew/opt/openssl@3
-   export PKG_CONFIG_ALLOW_CROSS=1
-   
-   # Build
-   cargo build --release --target x86_64-unknown-linux-musl
-   ```
-
-**Note:** The Google Cloud SDK crates use `reqwest` with default features (OpenSSL), so we cannot force `rustls` without forking those crates. This is documented in `Cargo.toml`.
-
-### Run Locally
-
-```bash
-# For GCP:
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
-
-# For AWS:
-export AWS_ACCESS_KEY_ID=your-access-key
-export AWS_SECRET_ACCESS_KEY=your-secret-key
-export AWS_DEFAULT_REGION=us-east-1
-
-# For Azure:
-export AZURE_CLIENT_ID=your-client-id
-export AZURE_CLIENT_SECRET=your-client-secret
-export AZURE_TENANT_ID=your-tenant-id
-
-# Run controller
-cargo run
-```
-
-### Deploy to Kubernetes
-
-The controller deploys to the `microscaler-system` namespace (GitOps provider agnostic) and works with both FluxCD and ArgoCD.
-
-```bash
-# Apply CRD
-kubectl apply -f config/crd/
-
-# Deploy controller to microscaler-system namespace
-kubectl apply -k config/
-```
-
-**Note:** The controller watches `SecretManagerConfig` resources in **all namespaces**, so you can deploy your `SecretManagerConfig` resources in any namespace where your services are deployed.
 
 ## Configuration
 
@@ -726,25 +430,6 @@ For non-GKE clusters or when Workload Identity is not available:
          secretKey: key.json
    ```
 
-### HTTP Endpoints
-
-- `GET /metrics` - Prometheus metrics endpoint
-- `GET /healthz` - Kubernetes liveness probe
-- `GET /readyz` - Kubernetes readiness probe
-
-### Prometheus Metrics
-
-The controller exposes the following metrics:
-
-- `secret_manager_reconciliations_total` - Total number of reconciliations
-- `secret_manager_reconciliation_errors_total` - Total number of reconciliation errors
-- `secret_manager_reconciliation_duration_seconds` - Duration of reconciliations
-- `secret_manager_secrets_synced_total` - Total number of secrets synced to GCP
-- `secret_manager_secrets_updated_total` - Total number of secrets updated (overwritten from git)
-- `secret_manager_secrets_managed` - Current number of secrets being managed
-- `secret_manager_gcp_operations_total` - Total number of GCP Secret Manager operations
-- `secret_manager_gcp_operation_duration_seconds` - Duration of GCP operations
-
 ### SOPS Private Key
 
 The controller automatically loads the SOPS private key from a Kubernetes secret in the `microscaler-system` namespace (or the namespace specified by `POD_NAMESPACE` environment variable). It looks for secrets named:
@@ -817,6 +502,168 @@ The controller uses a `ClusterRole` to watch resources across all namespaces:
 - Controller deploys to `microscaler-system` namespace
 - `SecretManagerConfig` resources can be deployed in **any namespace**
 - Controller automatically watches and reconciles resources in all namespaces
+
+### HTTP Endpoints
+
+- `GET /metrics` - Prometheus metrics endpoint
+- `GET /healthz` - Kubernetes liveness probe
+- `GET /readyz` - Kubernetes readiness probe
+
+### Prometheus Metrics
+
+The controller exposes the following metrics:
+
+- `secret_manager_reconciliations_total` - Total number of reconciliations
+- `secret_manager_reconciliation_errors_total` - Total number of reconciliation errors
+- `secret_manager_reconciliation_duration_seconds` - Duration of reconciliations
+- `secret_manager_secrets_synced_total` - Total number of secrets synced to GCP
+- `secret_manager_secrets_updated_total` - Total number of secrets updated (overwritten from git)
+- `secret_manager_secrets_managed` - Current number of secrets being managed
+- `secret_manager_gcp_operations_total` - Total number of GCP Secret Manager operations
+- `secret_manager_gcp_operation_duration_seconds` - Duration of GCP operations
+
+## Quick Start
+
+### Prerequisites
+
+- Kubernetes cluster with FluxCD or ArgoCD installed (for production)
+- Cloud provider credentials configured (GCP/AWS/Azure)
+- `kubectl` - Kubernetes CLI
+- **For Kustomize Build Mode**: `kustomize` binary must be available in the controller container (v5.0+)
+- **For ArgoCD support**: `git` binary must be available in the controller container (v2.0+)
+
+### Deploy to Kubernetes
+
+The controller deploys to the `microscaler-system` namespace (GitOps provider agnostic) and works with both FluxCD and ArgoCD.
+
+```bash
+# Apply CRD
+kubectl apply -f config/crd/
+
+# Deploy controller to microscaler-system namespace
+kubectl apply -k config/
+```
+
+**Note:** The controller watches `SecretManagerConfig` resources in **all namespaces**, so you can deploy your `SecretManagerConfig` resources in any namespace where your services are deployed.
+
+## Usage with Cloud Services
+
+After secrets are synced to cloud secret managers, reference them in your cloud services:
+
+### Google Cloud Platform (GCP) - CloudRun
+
+Use the [Upbound GCP CloudRun Provider](https://marketplace.upbound.io/providers/upbound/provider-gcp-cloudrun/v2.2.0) to reference secrets:
+
+```yaml
+apiVersion: cloudrun.gcp.upbound.io/v1beta1
+kind: Service
+metadata:
+  name: my-service
+spec:
+  forProvider:
+    template:
+      spec:
+        containers:
+        - image: gcr.io/my-project/my-service:latest
+          env:
+          - name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: my-service-database-url
+                key: latest
+```
+
+**Note on GCP Parameter Manager:**
+
+CloudRun supports both Secret Manager (for secrets) and Parameter Manager (for non-secret configuration values). Currently, this controller **only syncs to Secret Manager**. All values from `application.secrets.env`, `application.secrets.yaml`, and `application.properties` are stored in Secret Manager.
+
+If you need to use Parameter Manager for non-secret configs:
+- **Current limitation**: The controller does not support Parameter Manager. All values are synced to Secret Manager.
+- **Workaround**: You can manually create Parameter Manager parameters and reference them separately in your CloudRun service configuration.
+- **Future enhancement**: Support for Parameter Manager could be added to distinguish between secrets (Secret Manager) and configs (Parameter Manager), potentially based on file naming conventions (e.g., `application.config.env` → Parameter Manager, `application.secrets.env` → Secret Manager).
+
+**Note on Config Stores for Serverless Systems:**
+
+All three cloud providers offer separate services for non-secret configuration values:
+
+| Provider | Secret Store | Config Store | Current Controller Support |
+|----------|-------------|--------------|----------------------------|
+| **GCP** | Secret Manager | Parameter Manager | ❌ Only Secret Manager |
+| **AWS** | Secrets Manager | Systems Manager Parameter Store / AppConfig | ❌ Only Secrets Manager |
+| **Azure** | Key Vault | App Configuration | ❌ Only Key Vault |
+
+**Current Limitation**: The controller stores **all values** (including `application.properties`) in secret stores. Non-secret configs should ideally be stored in config stores for:
+- Lower costs
+- Better separation of concerns
+- Native serverless integration (Lambda extensions, App Configuration SDK)
+
+**Future Enhancement**: Support for config stores could be added using file-based routing:
+- `application.secrets.*` → Secret Store
+- `application.properties` → Config Store
+- `application.config.*` → Config Store (new)
+
+See [CONFIG_STORE_ANALYSIS.md](docs/CONFIG_STORE_ANALYSIS.md) for detailed analysis and implementation plan.
+
+### Amazon Web Services (AWS) - ECS/EKS/Lambda
+
+Reference secrets from AWS Secrets Manager in your ECS tasks, EKS pods, or Lambda functions:
+
+```yaml
+# ECS Task Definition
+apiVersion: ecs.aws.upbound.io/v1beta1
+kind: TaskDefinition
+metadata:
+  name: my-service
+spec:
+  forProvider:
+    containerDefinitions: |
+      [
+        {
+          "name": "my-service",
+          "image": "my-registry/my-service:latest",
+          "secrets": [
+            {
+              "name": "DATABASE_URL",
+              "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:my-service-database-url"
+            }
+          ]
+        }
+      ]
+```
+
+**Note on AWS Config Stores:**
+
+- **Systems Manager Parameter Store**: For non-secret configs, use Parameter Store instead of Secrets Manager. Lambda functions can use the Parameter Store Lambda extension for caching.
+- **AppConfig**: For advanced config management with feature flags and validation, use AWS AppConfig.
+- **Current limitation**: Controller only syncs to Secrets Manager. Configs from `application.properties` are stored as secrets.
+
+### Microsoft Azure - AKS/Container Apps/Azure Functions
+
+Reference secrets from Azure Key Vault in your AKS pods, Container Apps, or Azure Functions:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-service
+spec:
+  containers:
+  - name: my-service
+    image: my-registry/my-service:latest
+    env:
+    - name: DATABASE_URL
+      valueFrom:
+        secretKeyRef:
+          name: azure-keyvault-secret-my-service-database-url
+          key: value
+```
+
+**Note:** For Azure, you'll typically use the [External Secrets Operator](https://external-secrets.io/) or [Secrets Store CSI Driver](https://secrets-store-csi-driver.sigs.k8s.io/) to sync Azure Key Vault secrets to Kubernetes secrets.
+
+**Note on Azure Config Stores:**
+
+- **App Configuration**: For non-secret configs, use Azure App Configuration instead of Key Vault. Azure Functions can use the App Configuration SDK for dynamic configuration.
+- **Current limitation**: Controller only syncs to Key Vault. Configs from `application.properties` are stored as secrets.
 
 ## MSMCTL CLI
 
@@ -1100,9 +947,243 @@ for config in $(msmctl list --namespace pricewhisperer | awk 'NR>2 {print $1}');
 done
 ```
 
+## Development
+
+### Prerequisites
+
+- Rust 1.75+
+- Docker and Docker Compose
+- `kind` (Kubernetes in Docker) - for local cluster
+- `kubectl` - Kubernetes CLI
+- `tilt` - for local development (optional but recommended)
+- Kubernetes cluster with FluxCD or ArgoCD installed (for production)
+- Cloud provider credentials configured (GCP/AWS/Azure)
+- **For Kustomize Build Mode**: `kustomize` binary must be available in the controller container (v5.0+)
+- **For ArgoCD support**: `git` binary must be available in the controller container (v2.0+)
+- **For cross-compilation to Linux musl**: `cargo-zigbuild` (recommended) or OpenSSL development libraries configured manually
+  - Install with: `cargo install cargo-zigbuild`
+
+### Local Development with Kind Cluster
+
+The controller includes an independent kind cluster configuration for standalone development and testing. The project uses [`just`](https://github.com/casey/just) as a command runner for common development tasks.
+
+#### Quick Start
+
+1. **Check dependencies:**
+   ```bash
+   just check-deps
+   ```
+
+2. **Setup Kind cluster:**
+   ```bash
+   just setup-kind
+   ```
+
+   This will:
+   - Create a local Docker registry (`kind-registry`) if it doesn't exist
+   - Create a kind cluster named `secret-manager-controller`
+   - Configure the cluster to use the local registry
+   - Configure pod and service IP ranges (pods get their own IPs, no host port conflicts)
+
+3. **Start development environment:**
+   ```bash
+   just dev-up
+   ```
+
+   This will:
+   - Create the kind cluster (if not already created)
+   - Start Tilt for hot-reload development
+   - Generate the CRD when Rust code changes
+   - Build the Rust binary
+   - Build the Docker image and push to local registry
+   - Deploy to the kind cluster
+   - Watch for changes and automatically rebuild/redeploy
+
+4. **Access the Tilt UI:**
+   - Open http://localhost:10350 in your browser
+   - Monitor build logs, deployment status, and resource health
+
+5. **Access controller metrics:**
+   ```bash
+   # Port forward to access metrics endpoint (in a separate terminal)
+   just port-forward
+   # OR manually:
+   kubectl port-forward -n microscaler-system svc/secret-manager-controller-metrics 5000:5000
+   ```
+   Then access:
+   - Metrics: http://localhost:5000/metrics
+   - Health: http://localhost:5000/healthz
+   - Ready: http://localhost:5000/readyz
+
+   **Note:** Kubernetes pods get their own IP addresses (configured via `podSubnet`), so there are no host port conflicts. Access is via `kubectl port-forward` or Service types (ClusterIP/NodePort/LoadBalancer).
+
+#### Common Commands
+
+View all available commands:
+```bash
+just --list
+```
+
+**Development:**
+- `just dev-up` - Start development environment (Kind + Tilt)
+- `just dev-down` - Stop development environment
+- `just up` - Start Tilt (assumes cluster is running)
+- `just down` - Stop Tilt
+
+**Building:**
+- `just build` - Build Rust binary and Docker image
+- `just build-rust` - Build Rust binary (debug)
+- `just build-release` - Build Rust binary (release)
+- `just build-linux` - Build for Linux (musl target) - Uses `cargo-zigbuild` for OpenSSL cross-compilation
+- `just build-linux-release` - Build for Linux (musl target, release)
+- `just generate-crd` - Generate CRD from Rust code
+
+**Testing:**
+- `just test` - Run all tests (unit + pact)
+- `just test-unit` - Run unit tests
+- `just test-pact` - Run Pact contract tests
+- `just test-pact-gcp` - Run GCP Pact tests
+- `just test-pact-aws` - Run AWS Pact tests
+- `just test-pact-azure` - Run Azure Pact tests
+
+**Code Quality:**
+- `just fmt` - Format code
+- `just lint` - Lint code
+- `just check` - Check code (compile without building)
+- `just validate` - Run all validations (fmt, lint, check, tests)
+
+**Deployment:**
+- `just deploy` - Deploy to Kubernetes
+- `just deploy-crd` - Deploy CRD only
+- `just status` - Show cluster and controller status
+- `just logs` - Show controller logs
+
+**CLI Tool:**
+- `just build-cli` - Build msmctl CLI tool
+- `just install-cli` - Install msmctl to ~/.local/bin
+- `just cli <args>` - Run CLI tool (development mode)
+
+#### Manual Setup (without just)
+
+If you prefer not to use `just`, you can use the scripts directly:
+
+1. **Create the kind cluster:**
+   ```bash
+   ./scripts/setup-kind.sh
+   ```
+
+2. **Verify the cluster is running:**
+   ```bash
+   kubectl cluster-info --context kind-secret-manager-controller
+   ```
+
+3. **Start Tilt:**
+   ```bash
+   tilt up
+   ```
+
+#### Cleanup
+
+To stop and clean up everything:
+```bash
+just dev-down
+```
+
+Or manually:
+```bash
+# Stop Tilt
+tilt down
+
+# Delete kind cluster
+just teardown-kind
+# OR
+kind delete cluster --name secret-manager-controller
+
+# Remove local registry (optional)
+docker stop kind-registry
+docker rm kind-registry
+```
+
+### Build
+
+#### Native Build
+
+```bash
+cargo build --release
+```
+
+#### Cross-Compilation for Linux (musl)
+
+The controller uses the Google Cloud SDK crates which depend on `reqwest` with OpenSSL support. For cross-compilation to `x86_64-unknown-linux-musl`, you need to handle OpenSSL dependencies.
+
+**Recommended: Use `cargo-zigbuild`**
+
+The easiest way to cross-compile is using `cargo-zigbuild`, which automatically handles OpenSSL compilation for musl targets:
+
+```bash
+# Install cargo-zigbuild (if not already installed)
+cargo install cargo-zigbuild
+
+# Build for Linux musl target
+cargo zigbuild --release --target x86_64-unknown-linux-musl
+
+# Or use the justfile command
+just build-linux-release
+```
+
+**Alternative: Manual OpenSSL Configuration**
+
+If you prefer not to use `cargo-zigbuild`, you can configure OpenSSL manually:
+
+1. **Install OpenSSL development libraries:**
+   - **macOS (Homebrew):**
+     ```bash
+     brew install openssl@3
+     export OPENSSL_DIR=$(brew --prefix openssl@3)
+     ```
+   - **Ubuntu/Debian:**
+     ```bash
+     sudo apt-get install libssl-dev pkg-config
+     ```
+   - **Fedora:**
+     ```bash
+     sudo dnf install openssl-devel pkg-config
+     ```
+
+2. **Set environment variables for cross-compilation:**
+   ```bash
+   # macOS example
+   export OPENSSL_DIR=/opt/homebrew/opt/openssl@3
+   export PKG_CONFIG_ALLOW_CROSS=1
+   
+   # Build
+   cargo build --release --target x86_64-unknown-linux-musl
+   ```
+
+**Note:** The Google Cloud SDK crates use `reqwest` with default features (OpenSSL), so we cannot force `rustls` without forking those crates. This is documented in `Cargo.toml`.
+
+### Run Locally
+
+```bash
+# For GCP:
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+
+# For AWS:
+export AWS_ACCESS_KEY_ID=your-access-key
+export AWS_SECRET_ACCESS_KEY=your-secret-key
+export AWS_DEFAULT_REGION=us-east-1
+
+# For Azure:
+export AZURE_CLIENT_ID=your-client-id
+export AZURE_CLIENT_SECRET=your-client-secret
+export AZURE_TENANT_ID=your-tenant-id
+
+# Run controller
+cargo run
+```
+
 ## Related Components
 
 - **Flux SourceController** - Provides GitRepository artifacts
 - **GitHub SOPS Bot** - Manages GPG keys for secret encryption
 - **Upbound GCP CloudRun Provider** - Consumes secrets from Secret Manager
-
