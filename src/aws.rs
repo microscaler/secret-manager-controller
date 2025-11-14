@@ -148,11 +148,14 @@ impl SecretManagerProvider for AwsSecretManager {
             .await
         {
             Ok(response) => {
-                let value = response.secret_string().map(ToString::to_string).or_else(|| {
-                    response
-                        .secret_binary()
-                        .map(|blob| String::from_utf8_lossy(blob.as_ref()).to_string())
-                });
+                let value = response
+                    .secret_string()
+                    .map(ToString::to_string)
+                    .or_else(|| {
+                        response
+                            .secret_binary()
+                            .map(|blob| String::from_utf8_lossy(blob.as_ref()).to_string())
+                    });
 
                 match value {
                     Some(v) => Ok(Some(v)),

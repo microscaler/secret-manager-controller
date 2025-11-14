@@ -261,8 +261,7 @@ async fn parse_env_file(
     // Check if file is SOPS-encrypted
     let content = if is_sops_encrypted(&content) {
         debug!("Detected SOPS-encrypted file: {}", path.display());
-        decrypt_sops_content(&content, sops_private_key)
-            .context("Failed to decrypt SOPS file")?
+        decrypt_sops_content(&content, sops_private_key).context("Failed to decrypt SOPS file")?
     } else {
         content
     };
@@ -299,8 +298,7 @@ async fn parse_yaml_secrets(
     // Check if file is SOPS-encrypted
     let content = if is_sops_encrypted(&content) {
         debug!("Detected SOPS-encrypted file: {}", path.display());
-        decrypt_sops_content(&content, sops_private_key)
-            .context("Failed to decrypt SOPS file")?
+        decrypt_sops_content(&content, sops_private_key).context("Failed to decrypt SOPS file")?
     } else {
         content
     };
