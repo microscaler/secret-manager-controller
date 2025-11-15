@@ -194,7 +194,7 @@ pub struct ConfigsConfig {
 }
 
 /// GCP config store type
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ConfigStoreType {
     /// Store configs as individual secrets in Secret Manager (interim solution)
@@ -204,6 +204,23 @@ pub enum ConfigStoreType {
     /// Requires ESO contribution for Kubernetes consumption
     #[serde(rename = "ParameterManager")]
     ParameterManager,
+}
+
+impl schemars::JsonSchema for ConfigStoreType {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("ConfigStoreType")
+    }
+
+    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        // Generate a structural schema for Kubernetes CRD
+        // Use enum with nullable support (not anyOf)
+        let schema_value = serde_json::json!({
+            "type": "string",
+            "enum": ["secretManager", "ParameterManager"],
+            "description": "GCP config store type. SecretManager: Store configs as individual secrets in Secret Manager (interim solution). ParameterManager: Store configs in Parameter Manager (future, after ESO contribution)."
+        });
+        schemars::schema::Schema::try_from(schema_value).expect("Failed to create Schema for ConfigStoreType")
+    }
 }
 
 /// GCP authentication configuration

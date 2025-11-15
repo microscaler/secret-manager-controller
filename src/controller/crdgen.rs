@@ -109,6 +109,18 @@ fn auth_config_schema(gen: &mut SchemaGenerator) -> Schema {
     Schema::try_from(schema_value).expect("Failed to create Schema from modified Value")
 }
 
+fn config_store_type_schema(_gen: &mut SchemaGenerator) -> Schema {
+    // Generate a structural schema for Kubernetes CRD
+    // Use nullable enum (not anyOf) for Option<ConfigStoreType>
+    let schema_value = serde_json::json!({
+        "type": "string",
+        "enum": ["secretManager", "ParameterManager"],
+        "nullable": true,
+        "description": "GCP config store type. SecretManager: Store configs as individual secrets in Secret Manager (interim solution). ParameterManager: Store configs in Parameter Manager (future, after ESO contribution)."
+    });
+    Schema::try_from(schema_value).expect("Failed to create Schema for ConfigStoreType")
+}
+
 /// GCP configuration for Secret Manager
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -175,11 +187,12 @@ pub struct ConfigsConfig {
     /// - SecretManager: Store configs as individual secrets in Secret Manager (interim solution)
     /// - ParameterManager: Store configs in Parameter Manager (future, after ESO contribution)
     #[serde(default)]
+    #[schemars(schema_with = "config_store_type_schema")]
     pub store: Option<ConfigStoreType>,
 }
 
 /// GCP config store type
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ConfigStoreType {
     /// Store configs as individual secrets in Secret Manager (interim solution)

@@ -145,8 +145,9 @@ local_resource(
             rm -f config/crd/secretmanagerconfig.yaml
             exit $exit_code
         fi
-        # Validate CRD is valid YAML (must start with apiVersion, kind, or ---)
-        if ! head -1 config/crd/secretmanagerconfig.yaml | grep -qE '^(apiVersion|kind|---)'; then
+        # Validate CRD is valid YAML (must contain apiVersion, kind, or --- after comments)
+        # Skip comment lines and check for actual YAML content
+        if ! grep -v '^#' config/crd/secretmanagerconfig.yaml | grep -qE '^(apiVersion|kind|---)'; then
             echo "❌ Error: CRD generation failed - file does not contain valid YAML" >&2
             echo "First 10 lines of output:" >&2
             head -10 config/crd/secretmanagerconfig.yaml >&2

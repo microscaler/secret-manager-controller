@@ -4,8 +4,9 @@
 //! Tests are included in the module files (e.g., reconciler.rs).
 
 use kube::CustomResource;
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 // Re-export modules so they can be tested
 pub mod controller;
@@ -132,7 +133,7 @@ pub struct ConfigsConfig {
 }
 
 /// GCP config store type
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ConfigStoreType {
     /// Store configs as individual secrets in Secret Manager (interim solution)
@@ -142,6 +143,23 @@ pub enum ConfigStoreType {
     /// Requires ESO contribution for Kubernetes consumption
     #[serde(rename = "ParameterManager")]
     ParameterManager,
+}
+
+impl JsonSchema for ConfigStoreType {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("ConfigStoreType")
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        // Generate a structural schema for Kubernetes CRD
+        // Use enum with nullable support (not anyOf)
+        let schema_value = serde_json::json!({
+            "type": "string",
+            "enum": ["secretManager", "ParameterManager"],
+            "description": "GCP config store type. SecretManager: Store configs as individual secrets in Secret Manager (interim solution). ParameterManager: Store configs in Parameter Manager (future, after ESO contribution)."
+        });
+        Schema::try_from(schema_value).expect("Failed to create Schema for ConfigStoreType")
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
