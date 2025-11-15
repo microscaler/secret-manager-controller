@@ -26,6 +26,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 use walkdir::WalkDir;
 
@@ -261,7 +262,7 @@ async fn parse_env_file(
     // Check if file is SOPS-encrypted
     let content = if is_sops_encrypted(&content) {
         debug!("Detected SOPS-encrypted file: {}", path.display());
-        decrypt_sops_content(&content, sops_private_key).context("Failed to decrypt SOPS file")?
+        decrypt_sops_content(&content, sops_private_key).await.context("Failed to decrypt SOPS file")?
     } else {
         content
     };
@@ -298,7 +299,7 @@ async fn parse_yaml_secrets(
     // Check if file is SOPS-encrypted
     let content = if is_sops_encrypted(&content) {
         debug!("Detected SOPS-encrypted file: {}", path.display());
-        decrypt_sops_content(&content, sops_private_key).context("Failed to decrypt SOPS file")?
+        decrypt_sops_content(&content, sops_private_key).await.context("Failed to decrypt SOPS file")?
     } else {
         content
     };
@@ -414,26 +415,169 @@ fn is_sops_encrypted(content: &str) -> bool {
     false
 }
 
-/// Decrypt SOPS-encrypted content using rops
-/// Note: This is a placeholder implementation. rops crate API may need adjustment.
-fn decrypt_sops_content(_content: &str, sops_private_key: Option<&str>) -> Result<String> {
-    // For now, we'll use a simplified approach:
-    // If a private key is provided, we can attempt decryption
-    // Otherwise, we'll need to rely on the sops binary or proper rops integration
+/// Decrypt SOPS-encrypted content using rops crate or sops binary
+/// 
+/// Supports two methods:
+/// 1. Using rops crate with GPG private key (future implementation)
+/// 2. Using sops binary (current implementation - more reliable)
+async fn decrypt_sops_content(content: &str, sops_private_key: Option<&str>) -> Result<String> {
+    // Try rops crate first if private key is provided (future enhancement)
+    if let Some(private_key) = sops_private_key {
+        debug!("Attempting SOPS decryption with provided GPG private key");
+        
+        // Try using rops crate (currently falls back to sops binary)
+        match decrypt_with_rops(content, private_key) {
+            Ok(decrypted) => {
+                debug!("Successfully decrypted SOPS content using rops");
+                return Ok(decrypted);
+            }
+            Err(e) => {
+                debug!("rops decryption failed: {}, trying sops binary", e);
+                // Fall through to try sops binary
+            }
+        }
+    }
+    
+    // Use sops binary (current implementation)
+    debug!("Attempting SOPS decryption using sops binary");
+    decrypt_with_sops_binary(content, sops_private_key).await
+}
 
-    // TODO: Implement proper SOPS decryption using rops crate
-    // The rops crate API needs to be verified - it may require different usage patterns
-    // For now, return an error indicating SOPS decryption is not yet fully implemented
-    // In production, this should call the sops binary or use rops properly
+/// Decrypt SOPS content using rops crate with GPG private key
+/// 
+/// Note: The rops crate API may require GPG keys to be in the system keyring.
+/// For now, we'll primarily use the sops binary which is more reliable.
+fn decrypt_with_rops(_content: &str, _private_key: &str) -> Result<String> {
+    // TODO: Implement rops crate decryption
+    // The rops crate API needs to be verified - it may require:
+    // 1. GPG keys to be imported into system keyring
+    // 2. Different API than expected
+    // 
+    // For now, return an error to fall back to sops binary
+    Err(anyhow::anyhow!("rops crate decryption not yet implemented - using sops binary fallback"))
+}
 
-    if sops_private_key.is_some() {
-        // Attempt decryption with provided key
-        // This is a placeholder - actual implementation depends on rops API
-        warn!("SOPS decryption with provided key is not yet fully implemented");
-        Err(anyhow::anyhow!("SOPS decryption not yet implemented - please use unencrypted files or implement proper rops integration"))
+/// Decrypt SOPS content using sops binary (fallback method)
+/// This is more reliable as it uses the actual sops tool
+async fn decrypt_with_sops_binary(content: &str, sops_private_key: Option<&str>) -> Result<String> {
+    use std::process::Stdio;
+    
+    // Check if sops binary is available
+    let sops_path = which::which("sops")
+        .context("sops binary not found in PATH. Please install sops: brew install sops (macOS) or see https://github.com/mozilla/sops")?;
+    
+    debug!("Using sops binary at: {:?}", sops_path);
+    
+    // Set up GPG keyring if private key is provided
+    let gpg_home = if let Some(private_key) = sops_private_key {
+        debug!("Importing GPG private key into temporary keyring");
+        import_gpg_key(private_key).await?
     } else {
-        // Try to use rops default keychain
-        warn!("SOPS decryption without explicit key is not yet fully implemented");
-        Err(anyhow::anyhow!("SOPS decryption not yet implemented - please use unencrypted files or provide private key"))
+        None
+    };
+    
+    // Create temporary file with encrypted content
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("sops-decrypt-{}.tmp", uuid::Uuid::new_v4()));
+    
+    // Write encrypted content to temp file
+    tokio::fs::write(&temp_file, content).await
+        .context("Failed to write encrypted content to temp file")?;
+    
+    // Prepare sops command
+    let mut cmd = tokio::process::Command::new(sops_path);
+    cmd.arg("-d")  // Decrypt
+       .arg(&temp_file)
+       .stdin(Stdio::null())
+       .stdout(Stdio::piped())
+       .stderr(Stdio::piped());
+    
+    // Set GPG home directory if we created a temporary one
+    if let Some(ref gpg_home_path) = gpg_home {
+        cmd.env("GNUPGHOME", gpg_home_path);
+        debug!("Using temporary GPG home: {:?}", gpg_home_path);
+    }
+    
+    // Execute sops command
+    let output = cmd.output().await
+        .context("Failed to execute sops command")?;
+    
+    // Clean up temp file
+    let _ = tokio::fs::remove_file(&temp_file).await;
+    
+    // Clean up temporary GPG home directory
+    if let Some(ref gpg_home_path) = gpg_home {
+        let _ = tokio::fs::remove_dir_all(gpg_home_path).await;
+    }
+    
+    if output.status.success() {
+        let decrypted = String::from_utf8(output.stdout)
+            .context("sops output is not valid UTF-8")?;
+        Ok(decrypted)
+    } else {
+        let error_msg = String::from_utf8_lossy(&output.stderr);
+        Err(anyhow::anyhow!(
+            "sops decryption failed: {} (exit code: {})",
+            error_msg,
+            output.status.code().unwrap_or(-1)
+        ))
+    }
+}
+
+/// Import GPG private key into a temporary GPG home directory
+/// Returns the path to the temporary GPG home directory if successful
+async fn import_gpg_key(private_key: &str) -> Result<Option<PathBuf>> {
+    use std::process::Stdio;
+    
+    // Check if gpg binary is available
+    let gpg_path = match which::which("gpg") {
+        Ok(path) => path,
+        Err(_) => {
+            warn!("gpg binary not found - SOPS decryption may fail if key is not in system keyring");
+            return Ok(None);
+        }
+    };
+    
+    // Create temporary GPG home directory
+    let temp_dir = std::env::temp_dir();
+    let gpg_home = temp_dir.join(format!("gpg-home-{}", uuid::Uuid::new_v4()));
+    tokio::fs::create_dir_all(&gpg_home).await
+        .context("Failed to create temporary GPG home directory")?;
+    
+    debug!("Created temporary GPG home: {:?}", gpg_home);
+    
+    // Import private key into temporary keyring
+    let mut cmd = tokio::process::Command::new(gpg_path);
+    cmd.env("GNUPGHOME", &gpg_home)
+       .arg("--batch")
+       .arg("--yes")
+       .arg("--import")
+       .stdin(Stdio::piped())
+       .stdout(Stdio::piped())
+       .stderr(Stdio::piped());
+    
+    let mut child = cmd.spawn()
+        .context("Failed to spawn gpg import command")?;
+    
+    // Write private key to stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(private_key.as_bytes()).await
+            .context("Failed to write GPG private key to stdin")?;
+        stdin.shutdown().await
+            .context("Failed to close stdin")?;
+    }
+    
+    let output = child.wait_with_output().await
+        .context("Failed to wait for gpg import command")?;
+    
+    if output.status.success() {
+        debug!("Successfully imported GPG private key");
+        Ok(Some(gpg_home))
+    } else {
+        let error_msg = String::from_utf8_lossy(&output.stderr);
+        warn!("Failed to import GPG private key: {}", error_msg);
+        // Clean up on failure
+        let _ = tokio::fs::remove_dir_all(&gpg_home).await;
+        Err(anyhow::anyhow!("Failed to import GPG private key: {}", error_msg))
     }
 }

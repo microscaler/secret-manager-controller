@@ -10,7 +10,7 @@ This controller:
 2. **Supports two modes:**
    - **Kustomize Build Mode** (recommended): Runs `kustomize build` and extracts secrets from generated Kubernetes Secret resources. Supports overlays, patches, and generators. Works with any GitOps tool (FluxCD, ArgoCD, etc.)
    - **Raw File Mode**: Reads `application.secrets.env`, `application.secrets.yaml`, and `application.properties` directly
-3. **Decrypts SOPS files** - Automatically decrypts SOPS-encrypted secret files using GPG private key from Kubernetes secret
+3. **Decrypts SOPS files** - ✅ Fully implemented! Automatically decrypts SOPS-encrypted secret files using GPG private key from Kubernetes secret
 4. **GitOps-agnostic** - Works with FluxCD, ArgoCD, or any GitOps tool that provides GitRepository artifacts
 5. **Multi-Cloud Support** - Syncs secrets to:
    - **Google Cloud Secret Manager** (GCP) - Default and recommended for GKE
@@ -523,6 +523,20 @@ The controller exposes the following metrics:
 - `secret_manager_gcp_operation_duration_seconds` - Duration of GCP operations
 
 ## Quick Start
+
+### Quick SOPS Testing
+
+Want to test SOPS decryption without setting up Git/Flux? Use our quick test scripts:
+
+```bash
+# Complete setup with all steps and instructions
+python3 scripts/test-sops-complete.py --env dev
+
+# Or just copy files quickly
+python3 scripts/test-sops-quick.py --env dev
+```
+
+This copies SOPS-encrypted files directly to the path where the controller expects them, bypassing Git/Flux setup. See `docs/QUICK_TEST_SOPS.md` for details.
 
 ### Prerequisites
 
@@ -1181,6 +1195,28 @@ export AZURE_TENANT_ID=your-tenant-id
 # Run controller
 cargo run
 ```
+
+## Testing
+
+### Quick SOPS Test
+
+Test SOPS decryption without full Git/Flux setup:
+
+```bash
+# Complete test setup
+python3 scripts/test-sops-complete.py --env dev
+
+# Quick file copy only
+python3 scripts/test-sops-quick.py --env dev
+```
+
+See `docs/QUICK_TEST_SOPS.md` for complete testing guide.
+
+### Example Configurations
+
+- `examples/test-sops-config.yaml` - Example SecretManagerConfig for testing
+- `examples/test-gitrepository-minimal.yaml` - Minimal GitRepository for quick tests
+- `examples/sample-deployment-configuration/` - Sample SOPS-encrypted files
 
 ## Related Components
 

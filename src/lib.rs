@@ -42,12 +42,88 @@ pub struct SecretManagerConfigSpec {
 }
 
 /// Cloud provider configuration
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", tag = "type")]
+/// Kubernetes sends data in format: {"type": "gcp", "gcp": {...}}
+/// We use externally tagged format and ignore the "type" field during deserialization
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum ProviderConfig {
+    #[serde(rename = "gcp")]
     Gcp(GcpConfig),
+    #[serde(rename = "aws")]
     Aws(AwsConfig),
+    #[serde(rename = "azure")]
     Azure(AzureConfig),
+}
+
+impl<'de> serde::Deserialize<'de> for ProviderConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+        use std::fmt;
+
+        struct ProviderConfigVisitor;
+
+        impl<'de> Visitor<'de> for ProviderConfigVisitor {
+            type Value = ProviderConfig;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a provider config object with gcp, aws, or azure field")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                // Try to find the variant key (gcp, aws, or azure)
+                let mut gcp: Option<GcpConfig> = None;
+                let mut aws: Option<AwsConfig> = None;
+                let mut azure: Option<AzureConfig> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "gcp" => {
+                            if gcp.is_some() {
+                                return Err(de::Error::duplicate_field("gcp"));
+                            }
+                            gcp = Some(map.next_value()?);
+                        }
+                        "aws" => {
+                            if aws.is_some() {
+                                return Err(de::Error::duplicate_field("aws"));
+                            }
+                            aws = Some(map.next_value()?);
+                        }
+                        "azure" => {
+                            if azure.is_some() {
+                                return Err(de::Error::duplicate_field("azure"));
+                            }
+                            azure = Some(map.next_value()?);
+                        }
+                        "type" => {
+                            // Ignore the "type" field - it's redundant
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                        _ => {
+                            // Ignore unknown fields (like "type")
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+
+                match (gcp, aws, azure) {
+                    (Some(config), None, None) => Ok(ProviderConfig::Gcp(config)),
+                    (None, Some(config), None) => Ok(ProviderConfig::Aws(config)),
+                    (None, None, Some(config)) => Ok(ProviderConfig::Azure(config)),
+                    (None, None, None) => Err(de::Error::missing_field("gcp, aws, or azure")),
+                    _ => Err(de::Error::custom("multiple provider types specified")),
+                }
+            }
+        }
+
+        deserializer.deserialize_map(ProviderConfigVisitor)
+    }
 }
 
 /// AWS configuration for Secrets Manager

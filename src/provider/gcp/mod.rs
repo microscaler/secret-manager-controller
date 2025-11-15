@@ -36,9 +36,9 @@ impl SecretManager {
     ///
     /// # Errors
     /// Returns an error if GCP client initialization fails
-    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
+    #[allow(clippy::missing_errors_doc)]
     pub async fn new(
-        _project_id: String,
+        project_id: String,
         _auth_type: Option<&str>,
         service_account_email: Option<&str>,
     ) -> Result<Self> {
@@ -55,37 +55,87 @@ impl SecretManager {
             info!("Using Workload Identity authentication (service account from pod annotation)");
         }
 
-        // Create client - SecretManagerService should have a constructor
-        // For now, we'll use a placeholder that needs to be fixed with actual API
-        // The client creation depends on the actual SDK API
-        // The google-cloud-auth crate will automatically detect Workload Identity or JSON credentials
-        // from the environment (GOOGLE_APPLICATION_CREDENTIALS or metadata server)
-        // TODO: Implement actual client creation when SDK API is available
-        Err(anyhow::anyhow!(
-            "SecretManagerService client creation needs to be implemented with correct SDK API. \
-            Please check google-cloud-secretmanager-v1 documentation for client initialization."
-        ))
+        // Create SecretManagerService client using builder pattern
+        // The client automatically handles authentication via:
+        // - Workload Identity (when running in GKE with WI enabled)
+        // - Application Default Credentials (ADC)
+        // - Service account JSON from GOOGLE_APPLICATION_CREDENTIALS
+        // - Metadata server (for GCE/GKE)
+        // The builder uses Application Default Credentials by default, which works with Workload Identity
+        let client = SecretManagerService::builder()
+            .build()
+            .await
+            .context("Failed to create SecretManagerService client. Ensure Workload Identity is configured or GOOGLE_APPLICATION_CREDENTIALS is set")?;
 
-        // Placeholder return (unreachable)
-        // Ok(Self {
-        //     client: SecretManagerService::new().await?,
-        //     project_id,
-        // })
+        Ok(Self {
+            client,
+            project_id,
+        })
     }
 
     /// Create or update secret, ensuring Git is source of truth
     /// If secret exists and value differs, creates new version and disables old versions
-    #[allow(clippy::missing_errors_doc, clippy::unused_async)]
+    #[allow(clippy::missing_errors_doc)]
     async fn create_or_update_secret_impl(
         &self,
-        _secret_name: &str,
-        _secret_value: &str,
+        secret_name: &str,
+        secret_value: &str,
     ) -> Result<bool> {
-        // Placeholder - needs proper SDK implementation
-        // TODO: Implement when SDK API is available
-        Err(anyhow::anyhow!(
-            "GCP Secret Manager not yet implemented - waiting for correct SDK API"
-        ))
+        use google_cloud_secretmanager_v1::model::{CreateSecretRequest, Secret, AddSecretVersionRequest, SecretPayload};
+
+        // Check if secret already exists
+        let secret_name_full = format!("projects/{}/secrets/{}", self.project_id, secret_name);
+        let existing_secret = self.get_secret_value(secret_name).await?;
+
+        // If secret doesn't exist, create it
+        if existing_secret.is_none() {
+            info!("Creating new GCP secret: {}", secret_name);
+            
+            // Create the secret resource first
+            let secret = Secret::default();
+            let create_request = CreateSecretRequest::default()
+                .set_parent(format!("projects/{}", self.project_id))
+                .set_secret_id(secret_name.to_string())
+                .set_secret(secret);
+
+            self.client
+                .create_secret()
+                .with_request(create_request)
+                .send()
+                .await
+                .context(format!("Failed to create GCP secret: {}", secret_name))?;
+        }
+
+        // Check if the value has changed
+        if let Some(existing_value) = existing_secret {
+            if existing_value == secret_value {
+                // Value hasn't changed, no update needed
+                return Ok(false);
+            }
+            // Value changed - we'll create a new version below
+            info!("Secret value changed, creating new version for: {}", secret_name);
+        }
+
+        // Add new secret version with the value
+        // Secret Manager expects raw bytes (not base64-encoded)
+        // The SDK will handle base64 encoding automatically
+        // Convert to owned bytes to avoid lifetime issues
+        let secret_bytes: Vec<u8> = secret_value.as_bytes().to_vec();
+        let mut payload = SecretPayload::default();
+        payload.data = secret_bytes.into();
+
+        let add_version_request = AddSecretVersionRequest::default()
+            .set_parent(secret_name_full.clone())
+            .set_payload(payload);
+
+        self.client
+            .add_secret_version()
+            .with_request(add_version_request)
+            .send()
+            .await
+            .context(format!("Failed to add version to GCP secret: {}", secret_name))?;
+
+        Ok(true)
     }
 
     /// Get the latest secret version value

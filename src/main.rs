@@ -28,13 +28,13 @@
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
-use kube::{api::Api, Client, CustomResource};
+use kube::{api::{Api, ListParams}, Client, CustomResource};
 use kube_runtime::{controller::Action, watcher, Controller};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub mod controller;
 pub mod observability;
@@ -96,15 +96,91 @@ pub struct SecretManagerConfigSpec {
 
 /// Cloud provider configuration
 /// Supports GCP, AWS, and Azure Secret Manager
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", tag = "type")]
+/// Kubernetes sends data in format: {"type": "gcp", "gcp": {...}}
+/// We use externally tagged format and ignore the "type" field during deserialization
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum ProviderConfig {
     /// Google Cloud Platform Secret Manager
+    #[serde(rename = "gcp")]
     Gcp(GcpConfig),
     /// Amazon Web Services Secrets Manager
+    #[serde(rename = "aws")]
     Aws(AwsConfig),
-    /// Microsoft Azure Key Vault (stub - not yet implemented)
+    /// Microsoft Azure Key Vault
+    #[serde(rename = "azure")]
     Azure(AzureConfig),
+}
+
+impl<'de> serde::Deserialize<'de> for ProviderConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+        use std::fmt;
+
+        struct ProviderConfigVisitor;
+
+        impl<'de> Visitor<'de> for ProviderConfigVisitor {
+            type Value = ProviderConfig;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a provider config object with gcp, aws, or azure field")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                // Try to find the variant key (gcp, aws, or azure)
+                let mut gcp: Option<GcpConfig> = None;
+                let mut aws: Option<AwsConfig> = None;
+                let mut azure: Option<AzureConfig> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "gcp" => {
+                            if gcp.is_some() {
+                                return Err(de::Error::duplicate_field("gcp"));
+                            }
+                            gcp = Some(map.next_value()?);
+                        }
+                        "aws" => {
+                            if aws.is_some() {
+                                return Err(de::Error::duplicate_field("aws"));
+                            }
+                            aws = Some(map.next_value()?);
+                        }
+                        "azure" => {
+                            if azure.is_some() {
+                                return Err(de::Error::duplicate_field("azure"));
+                            }
+                            azure = Some(map.next_value()?);
+                        }
+                        "type" => {
+                            // Ignore the "type" field - it's redundant
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                        _ => {
+                            // Ignore unknown fields (like "type")
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+
+                match (gcp, aws, azure) {
+                    (Some(config), None, None) => Ok(ProviderConfig::Gcp(config)),
+                    (None, Some(config), None) => Ok(ProviderConfig::Aws(config)),
+                    (None, None, Some(config)) => Ok(ProviderConfig::Azure(config)),
+                    (None, None, None) => Err(de::Error::missing_field("gcp, aws, or azure")),
+                    _ => Err(de::Error::custom("multiple provider types specified")),
+                }
+            }
+        }
+
+        deserializer.deserialize_map(ProviderConfigVisitor)
+    }
 }
 
 /// GCP configuration for Secret Manager
@@ -442,6 +518,23 @@ async fn main() -> Result<()> {
     // This allows developers to deploy SecretManagerConfig resources in any namespace
     let configs: Api<SecretManagerConfig> = Api::all(client.clone());
 
+    // Check if CRD is queryable before starting the controller
+    // This ensures the CRD is installed and the controller can watch for resources
+    match configs.list(&ListParams::default().limit(1)).await {
+        Ok(_) => {
+            info!("CRD is queryable, starting controller watch");
+        }
+        Err(e) => {
+            error!(
+                "CRD is not queryable; {:?}. Is the CRD installed?",
+                e
+            );
+            error!("Installation: kubectl apply -f config/crd/secretmanagerconfig.yaml");
+            // Don't exit - let the controller start and it will handle the error gracefully
+            warn!("Continuing despite CRD queryability check failure - controller will retry");
+        }
+    }
+
     // Create reconciler context
     let reconciler = Arc::new(Reconciler::new(client.clone()).await?);
 
@@ -450,8 +543,10 @@ async fn main() -> Result<()> {
         .is_ready
         .store(true, std::sync::atomic::Ordering::Relaxed);
 
-    // Create controller
-    Controller::new(configs, watcher::Config::default())
+    // Create controller with any_semantic() to watch for all semantic changes (create, update, delete)
+    // This ensures the controller picks up newly created resources
+    info!("Starting controller watch loop...");
+    Controller::new(configs, watcher::Config::default().any_semantic())
         .shutdown_on_signal()
         .run(
             controller::reconciler::Reconciler::reconcile,
@@ -466,7 +561,8 @@ async fn main() -> Result<()> {
             },
             reconciler.clone(),
         )
-        .for_each(|_| std::future::ready(()))
+        .filter_map(|x| async move { std::result::Result::ok(x) })
+        .for_each(|_| futures::future::ready(()))
         .await;
 
     info!("Controller stopped");

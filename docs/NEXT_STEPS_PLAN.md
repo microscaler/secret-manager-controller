@@ -29,11 +29,11 @@ All three phases of config store routing are now complete:
 
 ### Completed
 1. ✅ **Pact Contract Testing** - Comprehensive API coverage (51 tests)
-   - GCP Secret Manager: 12 tests
-   - AWS Secrets Manager: 13 tests
-   - AWS Parameter Store: 6 tests
-   - Azure Key Vault: 14 tests
-   - Azure App Configuration: 6 tests (NEW)
+   - GCP Secret Manager: 12 tests ✅
+   - AWS Secrets Manager: 13 tests ✅
+   - AWS Parameter Store: 6 tests ✅
+   - Azure Key Vault: 14 tests ✅
+   - Azure App Configuration: 6 tests ✅
    - All tests passing and publishing to Pact broker
 
 2. ✅ **Controller Infrastructure**
@@ -48,7 +48,7 @@ All three phases of config store routing are now complete:
    - Parses `application.secrets.env` → secrets
    - Parses `application.secrets.yaml` → secrets
    - Parses `application.properties` → properties
-   - SOPS decryption working
+   - ✅ SOPS decryption fully implemented (using sops binary with GPG key import)
 
 4. ✅ **GCP Secret Manager Provider**
    - Full CRUD operations implemented
