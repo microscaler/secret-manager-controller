@@ -6,8 +6,23 @@
 //!
 //! Configuration is done via the CRD's `otel` field or environment variables.
 //!
-//! Note: This is a simplified implementation. Full Otel support will be added
-//! as the opentelemetry-otlp API stabilizes.
+//! ## Current Status: Configuration Only
+//!
+//! **Current Implementation:** This module currently only logs OpenTelemetry configuration.
+//! Full tracing implementation is planned but pending API stabilization.
+//!
+//! **Why Configuration Only?**
+//! - The `opentelemetry-otlp` Rust crate API is still evolving
+//! - We want to ensure compatibility with stable APIs before implementing
+//! - Configuration logging allows users to verify their setup is correct
+//!
+//! **Planned Implementation:**
+//! - Full OTLP exporter integration when API stabilizes
+//! - Automatic span creation for reconciliation operations
+//! - Trace context propagation for provider API calls
+//! - Integration with Prometheus metrics
+//!
+//! **Tracking Issue:** See project roadmap for OpenTelemetry implementation timeline
 
 use anyhow::Result;
 use tracing::info;
@@ -19,7 +34,22 @@ use crate::OtelConfig;
 /// Returns `Ok(None)` if OpenTelemetry is not configured (no CRD config and no env vars).
 /// This allows users to skip Otel entirely if they don't have an Otel endpoint.
 ///
-/// Currently logs the configuration. Full implementation pending API stabilization.
+/// ## Current Behavior
+///
+/// Currently logs the configuration to verify setup. Full tracing implementation is planned
+/// but pending `opentelemetry-otlp` API stabilization.
+///
+/// ## Future Implementation
+///
+/// When implemented, this function will:
+/// - Initialize OTLP exporter with configured endpoint
+/// - Set up trace provider with appropriate resource attributes
+/// - Configure sampling and trace context propagation
+/// - Return tracer provider handle for shutdown
+///
+/// # Errors
+///
+/// Returns an error if configuration is invalid or initialization fails.
 pub fn init_otel(config: Option<&OtelConfig>) -> Result<Option<()>> {
     match config {
         Some(OtelConfig::Otlp {
@@ -39,7 +69,7 @@ pub fn init_otel(config: Option<&OtelConfig>) -> Result<Option<()>> {
                     .unwrap_or(env!("CARGO_PKG_VERSION")),
                 environment
             );
-            info!("Note: Full Otel implementation pending - configuration logged only");
+            info!("OpenTelemetry configuration validated. Full tracing implementation pending API stabilization.");
             Ok(Some(()))
         }
         Some(OtelConfig::Datadog {
@@ -63,7 +93,7 @@ pub fn init_otel(config: Option<&OtelConfig>) -> Result<Option<()>> {
             if api_key.is_some() {
                 info!("Datadog API key provided (hidden in logs)");
             }
-            info!("Note: Full Otel implementation pending - configuration logged only");
+            info!("Datadog OpenTelemetry configuration validated. Full tracing implementation pending API stabilization.");
             Ok(Some(()))
         }
         None => {
@@ -72,8 +102,7 @@ pub fn init_otel(config: Option<&OtelConfig>) -> Result<Option<()>> {
                 || std::env::var("DD_API_KEY").is_ok()
                 || std::env::var("DD_SITE").is_ok()
             {
-                info!("OpenTelemetry environment variables detected");
-                info!("Note: Full Otel implementation pending - environment variables logged only");
+                info!("OpenTelemetry environment variables detected. Full tracing implementation pending API stabilization.");
                 return Ok(Some(()));
             }
             info!("No OpenTelemetry configuration provided, skipping Otel initialization");
@@ -83,6 +112,17 @@ pub fn init_otel(config: Option<&OtelConfig>) -> Result<Option<()>> {
 }
 
 /// Shutdown OpenTelemetry tracer provider
+///
+/// ## Current Behavior
+///
+/// No-op in current implementation since tracing is not yet initialized.
+///
+/// ## Future Implementation
+///
+/// When tracing is implemented, this will:
+/// - Flush pending spans
+/// - Shutdown tracer provider gracefully
+/// - Clean up resources
 pub fn shutdown_otel(_tracer_provider: Option<()>) {
-    info!("OpenTelemetry shutdown called (no-op in current implementation)");
+    info!("OpenTelemetry shutdown called (no-op in current implementation - tracing not yet initialized)");
 }
