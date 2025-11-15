@@ -144,7 +144,11 @@ impl<'de> serde::Deserialize<'de> for ProviderConfig {
                             if gcp.is_some() {
                                 return Err(de::Error::duplicate_field("gcp"));
                             }
-                            gcp = Some(map.next_value()?);
+                            // Deserialize GcpConfig from the nested object
+                            // The JSON has {"projectId": "..."} which should map to project_id via rename_all
+                            gcp = Some(map.next_value::<GcpConfig>().map_err(|e| {
+                                de::Error::custom(format!("Failed to deserialize GcpConfig: {}", e))
+                            })?);
                         }
                         "aws" => {
                             if aws.is_some() {
