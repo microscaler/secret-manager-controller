@@ -20,10 +20,11 @@
 //! 5. Sync secrets to GCP Secret Manager
 //! 6. Update status
 
-// use crate::provider::aws::AwsSecretManager;  // Disabled for now
+use crate::provider::aws::AwsSecretManager;
+use crate::provider::aws::AwsParameterStore;
 // use crate::provider::azure::AzureKeyVault;  // Disabled for now
 use crate::provider::gcp::SecretManagerClient as GcpSecretManagerClient;
-use crate::provider::SecretManagerProvider;
+use crate::provider::{ConfigStoreProvider, SecretManagerProvider};
 use crate::{
     observability, Condition, ProviderConfig, SecretManagerConfig, SecretManagerConfigStatus,
     SourceRef,
@@ -340,15 +341,11 @@ impl Reconciler {
                 .await?;
                 Box::new(gcp_client)
             }
-            ProviderConfig::Aws(_aws_config) => {
-                // AWS support disabled for now
-                return Err(ReconcilerError::ReconciliationFailed(anyhow::anyhow!(
-                    "AWS provider is currently disabled"
-                )));
-                // let aws_provider = AwsSecretManager::new(aws_config, &ctx.client)
-                //     .await
-                //     .context("Failed to create AWS Secrets Manager client")?;
-                // Box::new(aws_provider)
+            ProviderConfig::Aws(aws_config) => {
+                let aws_provider = AwsSecretManager::new(aws_config, &ctx.client)
+                    .await
+                    .context("Failed to create AWS Secrets Manager client")?;
+                Box::new(aws_provider)
             }
             ProviderConfig::Azure(_azure_config) => {
                 // Azure support disabled for now
@@ -425,7 +422,7 @@ impl Reconciler {
             // Process each application file set
             for app_files in application_files {
                 match ctx
-                    .process_application_files(&*provider, &config, &app_files)
+                    .process_application_files(&*provider, &config, &app_files, &ctx)
                     .await
                 {
                     Ok(count) => {
@@ -718,6 +715,7 @@ impl Reconciler {
         provider: &dyn SecretManagerProvider,
         config: &SecretManagerConfig,
         app_files: &parser::ApplicationFiles,
+        ctx: &Reconciler,
     ) -> Result<i32> {
         let secret_prefix = config
             .spec
@@ -784,29 +782,76 @@ impl Reconciler {
                 let mut config_count = 0;
                 let mut config_updated_count = 0;
 
-                for (key, value) in properties {
-                    // Construct secret name for config (using same naming convention as secrets)
-                    // For GCP Secret Manager, we store configs as individual secrets
-                    let config_name = construct_secret_name(
-                        Some(secret_prefix),
-                        key.as_str(),
-                        config.spec.secrets.suffix.as_deref(),
-                    );
-                    match provider.create_or_update_secret(&config_name, &value).await {
-                        Ok(was_updated) => {
-                            config_count += 1;
-                            if was_updated {
-                                config_updated_count += 1;
-                                info!(
-                                    "Updated config {} from git (GitOps source of truth)",
-                                    config_name
-                                );
+                // Route to appropriate config store based on provider
+                match &config.spec.provider {
+                    ProviderConfig::Gcp(_gcp_config) => {
+                        // For GCP, reuse Secret Manager provider (store configs as individual secrets)
+                        // This is an interim solution until Parameter Manager support is contributed to ESO
+                        for (key, value) in properties {
+                            let config_name = construct_secret_name(
+                                Some(secret_prefix),
+                                key.as_str(),
+                                config.spec.secrets.suffix.as_deref(),
+                            );
+                            match provider.create_or_update_secret(&config_name, &value).await {
+                                Ok(was_updated) => {
+                                    config_count += 1;
+                                    if was_updated {
+                                        config_updated_count += 1;
+                                        info!(
+                                            "Updated config {} from git (GitOps source of truth)",
+                                            config_name
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to store config {}: {}", config_name, e);
+                                    return Err(e.context(format!("Failed to store config: {config_name}")));
+                                }
                             }
                         }
-                        Err(e) => {
-                            error!("Failed to store config {}: {}", config_name, e);
-                            return Err(e.context(format!("Failed to store config: {config_name}")));
+                    }
+                    ProviderConfig::Aws(aws_config) => {
+                        // For AWS, use Parameter Store
+                        let parameter_path = config
+                            .spec
+                            .configs
+                            .as_ref()
+                            .and_then(|c| c.parameter_path.as_deref());
+                        let aws_param_store = AwsParameterStore::new(
+                            aws_config,
+                            parameter_path,
+                            secret_prefix,
+                            &config.spec.secrets.environment,
+                            &ctx.client,
+                        )
+                        .await
+                        .context("Failed to create AWS Parameter Store client")?;
+
+                        for (key, value) in properties {
+                            match aws_param_store.create_or_update_config(&key, &value).await {
+                                Ok(was_updated) => {
+                                    config_count += 1;
+                                    if was_updated {
+                                        config_updated_count += 1;
+                                        info!(
+                                            "Updated config {} from git (GitOps source of truth)",
+                                            key
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to store config {}: {}", key, e);
+                                    return Err(e.context(format!("Failed to store config: {key}")));
+                                }
+                            }
                         }
+                    }
+                    ProviderConfig::Azure(_azure_config) => {
+                        // Azure App Configuration not yet implemented
+                        return Err(anyhow::anyhow!(
+                            "Azure App Configuration provider not yet implemented"
+                        ).into());
                     }
                 }
 

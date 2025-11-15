@@ -260,9 +260,9 @@ local_resource(
             TIMESTAMP=$(date +%s)
             
             # Publish each provider's contracts separately
-            # Provider names: gcp, aws, azure
-            PROVIDERS=("gcp" "aws" "azure")
-            PROVIDER_NAMES=("GCP-Secret-Manager" "AWS-Secrets-Manager" "Azure-Key-Vault")
+            # Provider names: gcp, aws, aws-parameter-store, azure
+            PROVIDERS=("gcp" "aws" "aws-parameter-store" "azure")
+            PROVIDER_NAMES=("GCP-Secret-Manager" "AWS-Secrets-Manager" "AWS-Parameter-Store" "Azure-Key-Vault")
             
             for i in "${!PROVIDERS[@]}"; do
                 PROVIDER="${PROVIDERS[$i]}"

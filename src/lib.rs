@@ -117,6 +117,12 @@ pub struct ConfigsConfig {
     /// When false, properties are stored as a JSON blob in secret stores (current behavior)
     #[serde(default)]
     pub enabled: bool,
+    /// AWS-specific: Parameter path prefix
+    /// Only applies when provider.type == aws
+    /// Optional: defaults to /{prefix}/{environment} if not specified
+    /// Example: /my-service/dev
+    #[serde(default)]
+    pub parameter_path: Option<String>,
     /// GCP-specific: Store type (default: SecretManager)
     /// Only applies when provider.type == gcp
     /// - SecretManager: Store configs as individual secrets in Secret Manager (interim solution)

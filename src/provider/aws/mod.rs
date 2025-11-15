@@ -239,3 +239,7 @@ mod tests {
         }
     }
 }
+
+// Export Parameter Store provider
+pub mod parameter_store;
+pub use parameter_store::AwsParameterStore;

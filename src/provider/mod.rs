@@ -1,8 +1,10 @@
 //! # Provider Modules
 //!
-//! Provider modules for different cloud secret managers.
+//! Provider modules for different cloud secret managers and config stores.
 //!
-//! Each provider implements the `SecretManagerProvider` trait defined below.
+//! Each provider implements either:
+//! - `SecretManagerProvider` trait for secret stores
+//! - `ConfigStoreProvider` trait for config stores
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -21,7 +23,22 @@ pub trait SecretManagerProvider: Send + Sync {
     async fn delete_secret(&self, secret_name: &str) -> Result<()>;
 }
 
+/// Provider trait for cloud config stores
+/// Used for storing application.properties and other configuration values
+#[async_trait]
+pub trait ConfigStoreProvider: Send + Sync {
+    /// Create or update a config value, ensuring Git is source of truth
+    /// Returns true if config was created/updated, false if no change was needed
+    async fn create_or_update_config(&self, config_key: &str, config_value: &str) -> Result<bool>;
+
+    /// Get a config value
+    async fn get_config_value(&self, config_key: &str) -> Result<Option<String>>;
+
+    /// Delete a config value (optional - may not be supported by all providers)
+    async fn delete_config(&self, config_key: &str) -> Result<()>;
+}
+
 // Provider implementations
 pub mod gcp;
-// pub mod aws;  // Disabled for now
+pub mod aws;
 // pub mod azure;  // Disabled for now
