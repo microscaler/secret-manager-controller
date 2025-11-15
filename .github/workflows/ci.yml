@@ -255,6 +255,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
+          build-args: |
+            BUILD_GIT_HASH=${{ github.sha }}
+            BUILD_TIMESTAMP=${{ github.run_id }}
+            BUILD_DATETIME=${{ github.event.head_commit.timestamp }}
 
   # Step 3: Run Pact tests in k3s cluster
   pact-tests:
