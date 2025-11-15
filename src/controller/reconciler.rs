@@ -35,6 +35,7 @@ use anyhow::{Context, Result};
 use kube::Client;
 use kube_runtime::controller::Action;
 use md5;
+use regex::Regex;
 use std::path::PathBuf;
 use std::time::Instant;
 use thiserror::Error;
@@ -240,28 +241,29 @@ impl Reconciler {
         let start = Instant::now();
         let name = config.metadata.name.as_deref().unwrap_or("unknown");
 
-        // Validate required fields before proceeding
-        if config.spec.source_ref.kind.is_empty() {
-            let err = anyhow::anyhow!("sourceRef.kind is required but is empty");
+        // Comprehensive validation of all CRD fields
+        if let Err(e) = Self::validate_secret_manager_config(&config) {
+            error!("Validation error for {}: {}", name, e);
+            // Update status to Failed with validation error
+            let _ = ctx.update_status_phase(&config, "Failed", Some(&format!("Validation failed: {}", e))).await;
+            return Err(ReconcilerError::ReconciliationFailed(e));
+        }
+
+        // Validate GitRepository pull interval - must be at least 1 minute to avoid rate limits
+        if let Err(e) = Self::validate_duration_interval(&config.spec.git_repository_pull_interval, "gitRepositoryPullInterval", 60) {
+            let err = anyhow::anyhow!("Invalid gitRepositoryPullInterval '{}': {}", config.spec.git_repository_pull_interval, e);
             error!("Validation error for {}: {}", name, err);
+            // Update status to Failed with validation error
+            let _ = ctx.update_status_phase(&config, "Failed", Some(&format!("Invalid gitRepositoryPullInterval: {}", e))).await;
             return Err(ReconcilerError::ReconciliationFailed(err));
         }
 
-        if config.spec.source_ref.name.is_empty() {
-            let err = anyhow::anyhow!("sourceRef.name is required but is empty");
+        // Validate reconcile interval - must be at least 1 minute to avoid rate limits
+        if let Err(e) = Self::validate_duration_interval(&config.spec.reconcile_interval, "reconcileInterval", 60) {
+            let err = anyhow::anyhow!("Invalid reconcileInterval '{}': {}", config.spec.reconcile_interval, e);
             error!("Validation error for {}: {}", name, err);
-            return Err(ReconcilerError::ReconciliationFailed(err));
-        }
-
-        if config.spec.source_ref.namespace.is_empty() {
-            let err = anyhow::anyhow!("sourceRef.namespace is required but is empty");
-            error!("Validation error for {}: {}", name, err);
-            return Err(ReconcilerError::ReconciliationFailed(err));
-        }
-
-        if config.spec.secrets.environment.is_empty() {
-            let err = anyhow::anyhow!("secrets.environment is required but is empty");
-            error!("Validation error for {}: {}", name, err);
+            // Update status to Failed with validation error
+            let _ = ctx.update_status_phase(&config, "Failed", Some(&format!("Invalid reconcileInterval: {}", e))).await;
             return Err(ReconcilerError::ReconciliationFailed(err));
         }
 
@@ -283,6 +285,11 @@ impl Reconciler {
         }
 
         observability::metrics::increment_reconciliations();
+
+        // Update status to Started
+        if let Err(e) = ctx.update_status_phase(&config, "Started", Some("Starting reconciliation")).await {
+            warn!("Failed to update status to Started: {}", e);
+        }
 
         // Validate and log SecretManagerConfig resource first
         info!(
@@ -319,6 +326,11 @@ impl Reconciler {
         
         let artifact_path = match config.spec.source_ref.kind.as_str() {
             "GitRepository" => {
+                // Update status to Cloning
+                if let Err(e) = ctx.update_status_phase(&config, "Cloning", Some("Fetching GitRepository artifact")).await {
+                    warn!("Failed to update status to Cloning: {}", e);
+                }
+                
                 // FluxCD GitRepository - get artifact path from status
                 info!("📦 Fetching FluxCD GitRepository: {}/{}", 
                     config.spec.source_ref.namespace,
@@ -358,6 +370,8 @@ impl Reconciler {
                                 config.spec.source_ref.namespace,
                                 config.spec.source_ref.name
                             );
+                            // Update status to Pending (waiting for GitRepository)
+                            let _ = ctx.update_status_phase(&config, "Pending", Some("GitRepository not found, waiting for creation")).await;
                             // Return requeue action - don't treat as error, just wait for resource
                             return Ok(Action::requeue(std::time::Duration::from_secs(30)));
                         }
@@ -369,6 +383,8 @@ impl Reconciler {
                             e
                         );
                         observability::metrics::increment_reconciliation_errors();
+                        // Update status to Failed
+                        let _ = ctx.update_status_phase(&config, "Failed", Some(&format!("Clone failed, repo unavailable: {}", e))).await;
                         return Err(ReconcilerError::ReconciliationFailed(e));
                     }
                 };
@@ -385,6 +401,8 @@ impl Reconciler {
                     Err(e) => {
                         error!("Failed to get FluxCD artifact path: {}", e);
                         observability::metrics::increment_reconciliation_errors();
+                        // Update status to Failed
+                        let _ = ctx.update_status_phase(&config, "Failed", Some(&format!("Failed to get artifact path: {}", e))).await;
                         return Err(ReconcilerError::ReconciliationFailed(e));
                     }
                 }
@@ -503,6 +521,29 @@ impl Reconciler {
             }
         };
 
+        // Determine what we're syncing and update status accordingly
+        let is_configs_enabled = config.spec.configs.as_ref().map(|c| c.enabled).unwrap_or(false);
+        let description = if is_configs_enabled {
+            // Check provider to determine config store type
+            match &config.spec.provider {
+                ProviderConfig::Gcp(_) => "Reconciling properties to Parameter Manager",
+                ProviderConfig::Aws(_) => "Reconciling properties to Parameter Store",
+                ProviderConfig::Azure(_) => "Reconciling properties to App Configuration",
+            }
+        } else {
+            // Syncing secrets
+            match &config.spec.provider {
+                ProviderConfig::Gcp(_) => "Reconciling secrets to Secret Manager",
+                ProviderConfig::Aws(_) => "Reconciling secrets to Secrets Manager",
+                ProviderConfig::Azure(_) => "Reconciling secrets to Key Vault",
+            }
+        };
+        
+        // Update status to Updating before syncing
+        if let Err(e) = ctx.update_status_phase(&config, "Updating", Some(description)).await {
+            warn!("Failed to update status to Updating: {}", e);
+        }
+
         let mut secrets_synced = 0;
 
         // Check if kustomize_path is specified - use kustomize build mode
@@ -525,6 +566,8 @@ impl Reconciler {
                         Err(e) => {
                             error!("Failed to process kustomize secrets: {}", e);
                             observability::metrics::increment_reconciliation_errors();
+                            // Update status to Failed
+                            let _ = ctx.update_status_phase(&config, "Failed", Some(&format!("Failed to process kustomize secrets: {}", e))).await;
                             return Err(ReconcilerError::ReconciliationFailed(e));
                         }
                     }
@@ -532,6 +575,8 @@ impl Reconciler {
                 Err(e) => {
                     error!("Failed to extract secrets from kustomize build: {}", e);
                     observability::metrics::increment_reconciliation_errors();
+                    // Update status to Failed
+                    let _ = ctx.update_status_phase(&config, "Failed", Some(&format!("Failed to extract secrets from kustomize: {}", e))).await;
                     return Err(ReconcilerError::ReconciliationFailed(e));
                 }
             }
@@ -557,6 +602,8 @@ impl Reconciler {
                         config.spec.secrets.environment, e
                     );
                     observability::metrics::increment_reconciliation_errors();
+                    // Update status to Failed
+                    let _ = ctx.update_status_phase(&config, "Failed", Some(&format!("Failed to find application files: {}", e))).await;
                     return Err(ReconcilerError::ReconciliationFailed(e));
                 }
             };
@@ -1119,6 +1166,61 @@ impl Reconciler {
         Ok(count)
     }
 
+    /// Update status with phase and optional message
+    async fn update_status_phase(
+        &self,
+        config: &SecretManagerConfig,
+        phase: &str,
+        message: Option<&str>,
+    ) -> Result<()> {
+        use kube::api::PatchParams;
+
+        let api: kube::Api<SecretManagerConfig> = kube::Api::namespaced(
+            self.client.clone(),
+            config.metadata.namespace.as_deref().unwrap_or("default"),
+        );
+
+        let mut conditions = vec![];
+        let ready_status = if phase == "Ready" { "True" } else { "False" };
+        let ready_reason = if phase == "Ready" {
+            "ReconciliationSucceeded"
+        } else if phase == "Failed" {
+            "ReconciliationFailed"
+        } else {
+            "ReconciliationInProgress"
+        };
+
+        conditions.push(Condition {
+            r#type: "Ready".to_string(),
+            status: ready_status.to_string(),
+            last_transition_time: Some(chrono::Utc::now().to_rfc3339()),
+            reason: Some(ready_reason.to_string()),
+            message: message.map(|s| s.to_string()),
+        });
+
+        let status = SecretManagerConfigStatus {
+            phase: Some(phase.to_string()),
+            description: message.map(|s| s.to_string()),
+            conditions,
+            observed_generation: config.metadata.generation,
+            last_reconcile_time: Some(chrono::Utc::now().to_rfc3339()),
+            secrets_synced: None,
+        };
+
+        let patch = serde_json::json!({
+            "status": status
+        });
+
+        api.patch_status(
+            config.metadata.name.as_deref().unwrap_or("unknown"),
+            &PatchParams::apply("secret-manager-controller"),
+            &kube::api::Patch::Merge(patch),
+        )
+        .await?;
+
+        Ok(())
+    }
+
     async fn update_status(&self, config: &SecretManagerConfig, secrets_synced: i32) -> Result<()> {
         use kube::api::PatchParams;
 
@@ -1127,13 +1229,23 @@ impl Reconciler {
             config.metadata.namespace.as_deref().unwrap_or("default"),
         );
 
+        // Determine what was synced for the description
+        let is_configs_enabled = config.spec.configs.as_ref().map(|c| c.enabled).unwrap_or(false);
+        let description = if is_configs_enabled {
+            format!("Synced {} properties to config store", secrets_synced)
+        } else {
+            format!("Synced {} secrets to secret store", secrets_synced)
+        };
+        
         let status = SecretManagerConfigStatus {
+            phase: Some("Ready".to_string()),
+            description: Some(description.clone()),
             conditions: vec![Condition {
                 r#type: "Ready".to_string(),
                 status: "True".to_string(),
                 last_transition_time: Some(chrono::Utc::now().to_rfc3339()),
                 reason: Some("ReconciliationSucceeded".to_string()),
-                message: Some(format!("Synced {secrets_synced} secrets")),
+                message: Some(description),
             }],
             observed_generation: config.metadata.generation,
             last_reconcile_time: Some(chrono::Utc::now().to_rfc3339()),
@@ -1150,6 +1262,585 @@ impl Reconciler {
             &kube::api::Patch::Merge(patch),
         )
         .await?;
+
+        Ok(())
+    }
+
+    /// Validate duration interval with regex and minimum value check
+    /// Ensures interval matches Kubernetes duration format and meets minimum requirement
+    /// Accepts Kubernetes duration format: "1m", "5m", "1h", etc.
+    /// 
+    /// # Arguments
+    /// * `interval` - The duration string to validate
+    /// * `field_name` - Name of the field for error messages
+    /// * `min_seconds` - Minimum allowed duration in seconds
+    /// 
+    /// # Returns
+    /// * `Ok(())` if valid
+    /// * `Err` with descriptive error message if invalid
+    fn validate_duration_interval(interval: &str, field_name: &str, min_seconds: u64) -> Result<()> {
+        use regex::Regex;
+        
+        // Trim whitespace
+        let interval_trimmed = interval.trim();
+        
+        if interval_trimmed.is_empty() {
+            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+        }
+
+        // Regex pattern for Kubernetes duration format
+        // Matches: <number><unit> where:
+        //   - number: one or more digits
+        //   - unit: s, m, h, d (case insensitive)
+        // Examples: "1m", "5m", "1h", "30m", "2h", "1d"
+        // Does NOT match: "30s" (if min_seconds >= 60), "abc", "1", "m", etc.
+        let duration_regex = Regex::new(r"^(?P<number>\d+)(?P<unit>[smhd])$")
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+
+        // Match against trimmed, lowercase version
+        let interval_lower = interval_trimmed.to_lowercase();
+        
+        let captures = duration_regex.captures(&interval_lower)
+            .ok_or_else(|| anyhow::anyhow!(
+                "Invalid duration format '{}': must match pattern <number><unit> where unit is s, m, h, or d (e.g., '1m', '5m', '1h')",
+                interval_trimmed
+            ))?;
+
+        // Extract number and unit from regex captures
+        let number_str = captures.name("number")
+            .ok_or_else(|| anyhow::anyhow!("Failed to extract number from duration '{}'", interval_trimmed))?
+            .as_str();
+        
+        let unit = captures.name("unit")
+            .ok_or_else(|| anyhow::anyhow!("Failed to extract unit from duration '{}'", interval_trimmed))?
+            .as_str();
+
+        // Parse number safely
+        let number: u64 = number_str.parse()
+            .map_err(|e| anyhow::anyhow!("Invalid duration number '{}' in '{}': {}", number_str, interval_trimmed, e))?;
+
+        if number == 0 {
+            return Err(anyhow::anyhow!("Duration number must be greater than 0, got '{}'", interval_trimmed));
+        }
+
+        // Convert to seconds based on unit
+        let seconds = match unit {
+            "s" => number,
+            "m" => number * 60,
+            "h" => number * 3600,
+            "d" => number * 86400,
+            _ => {
+                // This should never happen due to regex, but handle it safely
+                return Err(anyhow::anyhow!("Invalid duration unit '{}' in '{}': expected s, m, h, or d", unit, interval_trimmed));
+            }
+        };
+
+        // Enforce minimum
+        if seconds < min_seconds {
+            let min_duration = if min_seconds == 60 {
+                "1 minute (60 seconds)"
+            } else {
+                &format!("{} seconds", min_seconds)
+            };
+            return Err(anyhow::anyhow!(
+                "{} must be at least {} to avoid API rate limits. Got: '{}' ({} seconds)",
+                field_name,
+                min_duration,
+                interval_trimmed,
+                seconds
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Comprehensive validation of SecretManagerConfig fields
+    /// Validates all fields according to CRD schema and Kubernetes conventions
+    /// Returns Ok(()) if valid, Err with descriptive message if invalid
+    fn validate_secret_manager_config(config: &SecretManagerConfig) -> Result<()> {
+        // Validate sourceRef.kind
+        if config.spec.source_ref.kind.is_empty() {
+            return Err(anyhow::anyhow!("sourceRef.kind is required but is empty"));
+        }
+        if let Err(e) = Self::validate_source_ref_kind(&config.spec.source_ref.kind) {
+            return Err(anyhow::anyhow!("Invalid sourceRef.kind '{}': {}", config.spec.source_ref.kind, e));
+        }
+
+        // Validate sourceRef.name
+        if config.spec.source_ref.name.is_empty() {
+            return Err(anyhow::anyhow!("sourceRef.name is required but is empty"));
+        }
+        if let Err(e) = Self::validate_kubernetes_name(&config.spec.source_ref.name, "sourceRef.name") {
+            return Err(anyhow::anyhow!("Invalid sourceRef.name '{}': {}", config.spec.source_ref.name, e));
+        }
+
+        // Validate sourceRef.namespace
+        if config.spec.source_ref.namespace.is_empty() {
+            return Err(anyhow::anyhow!("sourceRef.namespace is required but is empty"));
+        }
+        if let Err(e) = Self::validate_kubernetes_namespace(&config.spec.source_ref.namespace) {
+            return Err(anyhow::anyhow!("Invalid sourceRef.namespace '{}': {}", config.spec.source_ref.namespace, e));
+        }
+
+        // Validate secrets.environment
+        if config.spec.secrets.environment.is_empty() {
+            return Err(anyhow::anyhow!("secrets.environment is required but is empty"));
+        }
+        if let Err(e) = Self::validate_kubernetes_label(&config.spec.secrets.environment, "secrets.environment") {
+            return Err(anyhow::anyhow!("Invalid secrets.environment '{}': {}", config.spec.secrets.environment, e));
+        }
+
+        // Validate optional secrets fields
+        if let Some(ref prefix) = config.spec.secrets.prefix {
+            if !prefix.is_empty() {
+                if let Err(e) = Self::validate_secret_name_component(prefix, "secrets.prefix") {
+                    return Err(anyhow::anyhow!("Invalid secrets.prefix '{}': {}", prefix, e));
+                }
+            }
+        }
+
+        if let Some(ref suffix) = config.spec.secrets.suffix {
+            if !suffix.is_empty() {
+                if let Err(e) = Self::validate_secret_name_component(suffix, "secrets.suffix") {
+                    return Err(anyhow::anyhow!("Invalid secrets.suffix '{}': {}", suffix, e));
+                }
+            }
+        }
+
+        if let Some(ref base_path) = config.spec.secrets.base_path {
+            if !base_path.is_empty() {
+                if let Err(e) = Self::validate_path(base_path, "secrets.basePath") {
+                    return Err(anyhow::anyhow!("Invalid secrets.basePath '{}': {}", base_path, e));
+                }
+            }
+        }
+
+        if let Some(ref kustomize_path) = config.spec.secrets.kustomize_path {
+            if !kustomize_path.is_empty() {
+                if let Err(e) = Self::validate_path(kustomize_path, "secrets.kustomizePath") {
+                    return Err(anyhow::anyhow!("Invalid secrets.kustomizePath '{}': {}", kustomize_path, e));
+                }
+            }
+        }
+
+        // Validate provider configuration
+        if let Err(e) = Self::validate_provider_config(&config.spec.provider) {
+            return Err(anyhow::anyhow!("Invalid provider configuration: {}", e));
+        }
+
+        // Validate configs configuration if present
+        if let Some(ref configs) = config.spec.configs {
+            if let Err(e) = Self::validate_configs_config(configs) {
+                return Err(anyhow::anyhow!("Invalid configs configuration: {}", e));
+            }
+        }
+
+        // Boolean fields are validated by serde, but we ensure they're not None
+        // diffDiscovery and triggerUpdate have defaults, so they're always present
+
+        Ok(())
+    }
+
+    /// Validate sourceRef.kind
+    /// Must be "GitRepository" or "Application" (case-sensitive)
+    fn validate_source_ref_kind(kind: &str) -> Result<()> {
+        let kind_trimmed = kind.trim();
+        match kind_trimmed {
+            "GitRepository" | "Application" => Ok(()),
+            _ => Err(anyhow::anyhow!(
+                "Must be 'GitRepository' or 'Application' (case-sensitive), got '{}'",
+                kind_trimmed
+            )),
+        }
+    }
+
+    /// Validate Kubernetes resource name (RFC 1123 subdomain)
+    /// Format: lowercase alphanumeric, hyphens, dots
+    /// Length: 1-253 characters
+    /// Cannot start or end with hyphen or dot
+    fn validate_kubernetes_name(name: &str, field_name: &str) -> Result<()> {
+        let name_trimmed = name.trim();
+        
+        if name_trimmed.is_empty() {
+            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+        }
+
+        if name_trimmed.len() > 253 {
+            return Err(anyhow::anyhow!(
+                "{} '{}' exceeds maximum length of 253 characters (got {})",
+                field_name,
+                name_trimmed,
+                name_trimmed.len()
+            ));
+        }
+
+        // RFC 1123 subdomain: [a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*
+        // Simplified: lowercase alphanumeric, hyphens, dots; cannot start/end with hyphen or dot
+        let name_regex = Regex::new(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+
+        if !name_regex.is_match(name_trimmed) {
+            return Err(anyhow::anyhow!(
+                "{} '{}' must be a valid Kubernetes name (lowercase alphanumeric, hyphens, dots; cannot start/end with hyphen or dot)",
+                field_name,
+                name_trimmed
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate Kubernetes namespace (RFC 1123 label)
+    /// Format: lowercase alphanumeric, hyphens
+    /// Length: 1-63 characters
+    /// Cannot start or end with hyphen
+    fn validate_kubernetes_namespace(namespace: &str) -> Result<()> {
+        let namespace_trimmed = namespace.trim();
+        
+        if namespace_trimmed.is_empty() {
+            return Err(anyhow::anyhow!("sourceRef.namespace cannot be empty"));
+        }
+
+        if namespace_trimmed.len() > 63 {
+            return Err(anyhow::anyhow!(
+                "sourceRef.namespace '{}' exceeds maximum length of 63 characters (got {})",
+                namespace_trimmed,
+                namespace_trimmed.len()
+            ));
+        }
+
+        // RFC 1123 label: [a-z0-9]([-a-z0-9]*[a-z0-9])?
+        let namespace_regex = Regex::new(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+
+        if !namespace_regex.is_match(namespace_trimmed) {
+            return Err(anyhow::anyhow!(
+                "sourceRef.namespace '{}' must be a valid Kubernetes namespace (lowercase alphanumeric, hyphens; cannot start/end with hyphen)",
+                namespace_trimmed
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate Kubernetes label value
+    /// Format: lowercase alphanumeric, hyphens, dots, underscores
+    /// Length: 1-63 characters
+    /// Cannot start or end with dot
+    fn validate_kubernetes_label(label: &str, field_name: &str) -> Result<()> {
+        let label_trimmed = label.trim();
+        
+        if label_trimmed.is_empty() {
+            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+        }
+
+        if label_trimmed.len() > 63 {
+            return Err(anyhow::anyhow!(
+                "{} '{}' exceeds maximum length of 63 characters (got {})",
+                field_name,
+                label_trimmed,
+                label_trimmed.len()
+            ));
+        }
+
+        // Kubernetes label: [a-z0-9]([-a-z0-9_.]*[a-z0-9])?
+        let label_regex = Regex::new(r"^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$")
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+
+        if !label_regex.is_match(label_trimmed) {
+            return Err(anyhow::anyhow!(
+                "{} '{}' must be a valid Kubernetes label (lowercase alphanumeric, hyphens, dots, underscores; cannot start/end with dot)",
+                field_name,
+                label_trimmed
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate secret name component (prefix or suffix)
+    /// Must be valid for cloud provider secret names
+    /// Format: alphanumeric, hyphens, underscores
+    /// Length: 1-255 characters
+    fn validate_secret_name_component(component: &str, field_name: &str) -> Result<()> {
+        let component_trimmed = component.trim();
+        
+        if component_trimmed.is_empty() {
+            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+        }
+
+        if component_trimmed.len() > 255 {
+            return Err(anyhow::anyhow!(
+                "{} '{}' exceeds maximum length of 255 characters (got {})",
+                field_name,
+                component_trimmed,
+                component_trimmed.len()
+            ));
+        }
+
+        // Secret name component: alphanumeric, hyphens, underscores
+        let secret_regex = Regex::new(r"^[a-zA-Z0-9_-]+$")
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+
+        if !secret_regex.is_match(component_trimmed) {
+            return Err(anyhow::anyhow!(
+                "{} '{}' must contain only alphanumeric characters, hyphens, and underscores",
+                field_name,
+                component_trimmed
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate file path
+    /// Must be a valid relative or absolute path
+    /// Cannot contain null bytes or invalid path characters
+    fn validate_path(path: &str, field_name: &str) -> Result<()> {
+        let path_trimmed = path.trim();
+        
+        if path_trimmed.is_empty() {
+            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+        }
+
+        // Check for null bytes
+        if path_trimmed.contains('\0') {
+            return Err(anyhow::anyhow!("{} '{}' cannot contain null bytes", field_name, path_trimmed));
+        }
+
+        // Basic path validation: no control characters, reasonable length
+        if path_trimmed.len() > 4096 {
+            return Err(anyhow::anyhow!(
+                "{} '{}' exceeds maximum length of 4096 characters (got {})",
+                field_name,
+                path_trimmed,
+                path_trimmed.len()
+            ));
+        }
+
+        // Check for invalid path patterns (Windows drive letters, etc.)
+        // Allow relative paths (starting with .), absolute paths, and normal paths
+        // Exclude: < > : " | ? * and control characters (\x00-\x1f)
+        // Use a simpler validation: just check for null bytes and control characters
+        // Paths can contain most characters except control chars
+        for ch in path_trimmed.chars() {
+            if ch.is_control() {
+                return Err(anyhow::anyhow!(
+                    "{} '{}' contains control characters",
+                    field_name,
+                    path_trimmed
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate provider configuration
+    /// Uses official provider API constraints from:
+    /// - GCP: https://cloud.google.com/resource-manager/docs/creating-managing-projects
+    /// - AWS: https://docs.aws.amazon.com/general/latest/gr/rande.html
+    /// - Azure: https://learn.microsoft.com/en-us/azure/key-vault/general/about-keys-secrets-certificates#vault-name
+    fn validate_provider_config(provider: &ProviderConfig) -> Result<()> {
+        match provider {
+            ProviderConfig::Gcp(gcp) => {
+                if gcp.project_id.is_empty() {
+                    return Err(anyhow::anyhow!("provider.gcp.projectId is required but is empty"));
+                }
+                // GCP project ID validation per official GCP API constraints:
+                // - Length: 6-30 characters
+                // - Must start with a lowercase letter
+                // - Cannot end with a hyphen
+                // - Allowed: lowercase letters, numbers, hyphens
+                // Reference: https://cloud.google.com/resource-manager/docs/creating-managing-projects
+                let project_id_regex = Regex::new(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+                    .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+                
+                if !project_id_regex.is_match(&gcp.project_id) {
+                    return Err(anyhow::anyhow!(
+                        "provider.gcp.projectId '{}' must be a valid GCP project ID (6-30 characters, lowercase letters/numbers/hyphens, must start with letter, cannot end with hyphen). See: https://cloud.google.com/resource-manager/docs/creating-managing-projects",
+                        gcp.project_id
+                    ));
+                }
+            }
+            ProviderConfig::Aws(aws) => {
+                if aws.region.is_empty() {
+                    return Err(anyhow::anyhow!("provider.aws.region is required but is empty"));
+                }
+                // AWS region validation per official AWS API constraints:
+                // - Format: [a-z]{2}-[a-z]+-[0-9]+ (e.g., us-east-1, eu-west-1)
+                // - Some regions include -gov or -iso segments (e.g., us-gov-west-1)
+                // - Must match valid AWS region codes
+                // Reference: https://docs.aws.amazon.com/general/latest/gr/rande.html
+                Self::validate_aws_region(&aws.region)?;
+            }
+            ProviderConfig::Azure(azure) => {
+                if azure.vault_name.is_empty() {
+                    return Err(anyhow::anyhow!("provider.azure.vaultName is required but is empty"));
+                }
+                // Azure Key Vault name validation per official Azure API constraints:
+                // - Length: 3-24 characters
+                // - Must start with a letter
+                // - Cannot end with a hyphen
+                // - Allowed: alphanumeric characters and hyphens
+                // - Hyphens cannot be consecutive
+                // Reference: https://learn.microsoft.com/en-us/azure/key-vault/general/about-keys-secrets-certificates#vault-name
+                let vault_name_regex = Regex::new(r"^[a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9]$")
+                    .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+                
+                if !vault_name_regex.is_match(&azure.vault_name) {
+                    return Err(anyhow::anyhow!(
+                        "provider.azure.vaultName '{}' must be a valid Azure Key Vault name (3-24 characters, alphanumeric/hyphens, must start with letter, cannot end with hyphen). See: https://learn.microsoft.com/en-us/azure/key-vault/general/about-keys-secrets-certificates#vault-name",
+                        azure.vault_name
+                    ));
+                }
+                
+                // Check for consecutive hyphens
+                if azure.vault_name.contains("--") {
+                    return Err(anyhow::anyhow!(
+                        "provider.azure.vaultName '{}' cannot contain consecutive hyphens",
+                        azure.vault_name
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate AWS region against official AWS region format
+    /// Supports standard regions (us-east-1) and special regions (us-gov-west-1, cn-north-1)
+    /// Reference: https://docs.aws.amazon.com/general/latest/gr/rande.html
+    fn validate_aws_region(region: &str) -> Result<()> {
+        let region_trimmed = region.trim().to_lowercase();
+        
+        if region_trimmed.is_empty() {
+            return Err(anyhow::anyhow!("provider.aws.region cannot be empty"));
+        }
+
+        // AWS region format patterns:
+        // Standard: [a-z]{2}-[a-z]+-[0-9]+ (e.g., us-east-1, eu-west-1)
+        // Gov: [a-z]{2}-gov-[a-z]+-[0-9]+ (e.g., us-gov-west-1)
+        // ISO: [a-z]{2}-iso-[a-z]+-[0-9]+ (e.g., us-iso-east-1)
+        // China: cn-[a-z]+-[0-9]+ (e.g., cn-north-1)
+        // Local: local (for localstack)
+        
+        // Standard region pattern: [a-z]{2}-[a-z]+-[0-9]+
+        let standard_pattern = Regex::new(r"^[a-z]{2}-[a-z]+-\d+$")
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+        
+        // Gov region pattern: [a-z]{2}-gov-[a-z]+-[0-9]+
+        let gov_pattern = Regex::new(r"^[a-z]{2}-gov-[a-z]+-\d+$")
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+        
+        // ISO region pattern: [a-z]{2}-iso-[a-z]+-[0-9]+
+        let iso_pattern = Regex::new(r"^[a-z]{2}-iso-[a-z]+-\d+$")
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+        
+        // China region pattern: cn-[a-z]+-[0-9]+
+        let china_pattern = Regex::new(r"^cn-[a-z]+-\d+$")
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+        
+        // Local pattern (for localstack/testing)
+        let local_pattern = Regex::new(r"^local$")
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+
+        if standard_pattern.is_match(&region_trimmed)
+            || gov_pattern.is_match(&region_trimmed)
+            || iso_pattern.is_match(&region_trimmed)
+            || china_pattern.is_match(&region_trimmed)
+            || local_pattern.is_match(&region_trimmed)
+        {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "provider.aws.region '{}' must be a valid AWS region code (e.g., 'us-east-1', 'eu-west-1', 'us-gov-west-1', 'cn-north-1'). See: https://docs.aws.amazon.com/general/latest/gr/rande.html",
+                region
+            ))
+        }
+    }
+
+    /// Validate configs configuration
+    fn validate_configs_config(configs: &crate::ConfigsConfig) -> Result<()> {
+        // Validate store type if present
+        // ConfigStoreType is an enum, so it's already validated by serde
+        // No additional validation needed - enum variants are: SecretManager, ParameterManager
+        if let Some(ref _store) = configs.store {
+            // Enum is already validated by serde deserialization
+            // ConfigStoreType::SecretManager or ConfigStoreType::ParameterManager are the only valid values
+        }
+
+        // Validate appConfigEndpoint if present
+        if let Some(ref endpoint) = configs.app_config_endpoint {
+            if !endpoint.is_empty() {
+                if let Err(e) = Self::validate_url(endpoint, "configs.appConfigEndpoint") {
+                    return Err(anyhow::anyhow!("Invalid configs.appConfigEndpoint '{}': {}", endpoint, e));
+                }
+            }
+        }
+
+        // Validate parameterPath if present
+        if let Some(ref path) = configs.parameter_path {
+            if !path.is_empty() {
+                if let Err(e) = Self::validate_aws_parameter_path(path, "configs.parameterPath") {
+                    return Err(anyhow::anyhow!("Invalid configs.parameterPath '{}': {}", path, e));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate URL format
+    fn validate_url(url: &str, field_name: &str) -> Result<()> {
+        let url_trimmed = url.trim();
+        
+        if url_trimmed.is_empty() {
+            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+        }
+
+        // Basic URL validation: must start with http:// or https://
+        let url_regex = Regex::new(r"^https?://[^\s/$.?#].[^\s]*$")
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+
+        if !url_regex.is_match(url_trimmed) {
+            return Err(anyhow::anyhow!(
+                "{} '{}' must be a valid URL starting with http:// or https://",
+                field_name,
+                url_trimmed
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate AWS Parameter Store path
+    /// Format: /path/to/parameter (must start with /)
+    fn validate_aws_parameter_path(path: &str, field_name: &str) -> Result<()> {
+        let path_trimmed = path.trim();
+        
+        if path_trimmed.is_empty() {
+            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+        }
+
+        if !path_trimmed.starts_with('/') {
+            return Err(anyhow::anyhow!(
+                "{} '{}' must start with '/' (e.g., '/my-service/dev')",
+                field_name,
+                path_trimmed
+            ));
+        }
+
+        // AWS Parameter Store path: /[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)*
+        let param_path_regex = Regex::new(r"^/[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)*$")
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+
+        if !param_path_regex.is_match(path_trimmed) {
+            return Err(anyhow::anyhow!(
+                "{} '{}' must be a valid AWS Parameter Store path (e.g., '/my-service/dev')",
+                field_name,
+                path_trimmed
+            ));
+        }
 
         Ok(())
     }

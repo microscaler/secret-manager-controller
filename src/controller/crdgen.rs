@@ -39,7 +39,7 @@ use std::borrow::Cow;
     version = "v1",
     namespaced,
     status = "SecretManagerConfigStatus",
-    printcolumn = r#"{"name":"Ready", "type":"string", "jsonPath":".status.conditions[?(@.type==\"Ready\")].status"}"#
+    printcolumn = r#"{"name":"Phase", "type":"string", "jsonPath":".status.phase"}, {"name":"Description", "type":"string", "jsonPath":".status.description"}, {"name":"Ready", "type":"string", "jsonPath":".status.conditions[?(@.type==\"Ready\")].status"}"#
 )]
 #[serde(rename_all = "camelCase")]
 pub struct SecretManagerConfigSpec {
@@ -54,6 +54,32 @@ pub struct SecretManagerConfigSpec {
     // The otel field will be added back once we resolve the schema conflict
     // #[serde(default)]
     // pub otel: Option<OtelConfig>,
+    /// GitRepository pull update interval
+    /// How often to check for updates from the GitRepository source
+    /// Format: Kubernetes duration string (e.g., "1m", "5m", "1h")
+    /// Minimum: 1m (60 seconds) - shorter intervals may hit API rate limits
+    /// Default: "5m" (5 minutes)
+    /// Recommended: 5m or greater to avoid rate limiting
+    #[serde(default = "default_git_repository_pull_interval")]
+    pub git_repository_pull_interval: String,
+    /// Reconcile interval
+    /// How often to reconcile secrets between Git and cloud providers (Secret Manager or Parameter Manager)
+    /// Format: Kubernetes duration string (e.g., "1m", "30s", "5m")
+    /// Default: "1m" (1 minute)
+    #[serde(default = "default_reconcile_interval")]
+    pub reconcile_interval: String,
+    /// Enable diff discovery
+    /// When enabled, detects if secrets have been tampered with in Secret Manager or Parameter Manager
+    /// and logs warnings when differences are found between Git (source of truth) and cloud provider
+    /// Default: true (enabled)
+    #[serde(default = "default_true")]
+    pub diff_discovery: bool,
+    /// Enable update triggers
+    /// When enabled, automatically updates cloud provider secrets if Git values have changed since last pull
+    /// This ensures Git remains the source of truth
+    /// Default: true (enabled)
+    #[serde(default = "default_true")]
+    pub trigger_update: bool,
 }
 
 /// Cloud provider configuration
@@ -283,9 +309,29 @@ fn default_source_kind() -> String {
     "GitRepository".to_string()
 }
 
+fn default_git_repository_pull_interval() -> String {
+    "5m".to_string()
+}
+
+fn default_reconcile_interval() -> String {
+    "1m".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SecretManagerConfigStatus {
+    /// Current phase of reconciliation
+    /// Values: Pending, Started, Cloning, Updating, Failed, Ready
+    #[serde(default)]
+    pub phase: Option<String>,
+    /// Human-readable description of current state
+    /// Examples: "Clone failed, repo unavailable", "Reconciling secrets to Secret Manager", "Reconciling properties to Parameter Manager"
+    #[serde(default)]
+    pub description: Option<String>,
     #[serde(default)]
     pub conditions: Vec<Condition>,
     #[serde(default)]

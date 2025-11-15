@@ -41,8 +41,8 @@ spec:
           httpGet:
             path: /readyz
             port: metrics
-          initialDelaySeconds: 5
-          periodSeconds: 5
+          initialDelaySeconds: 10
+          periodSeconds: 10
         # Volume mount for JSON credentials (only needed if not using Workload Identity)
         # Uncomment the following if using JSON credentials:
         # volumeMounts:

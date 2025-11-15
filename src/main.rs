@@ -72,7 +72,7 @@ use controller::server::{start_server, ServerState};
     version = "v1",
     namespaced,
     status = "SecretManagerConfigStatus",
-    printcolumn = r#"{"name":"Ready", "type":"string", "jsonPath":".status.conditions[?(@.type==\"Ready\")].status"}"#
+    printcolumn = r#"{"name":"Phase", "type":"string", "jsonPath":".status.phase"}, {"name":"Description", "type":"string", "jsonPath":".status.description"}, {"name":"Ready", "type":"string", "jsonPath":".status.conditions[?(@.type==\"Ready\")].status"}"#
 )]
 #[serde(rename_all = "camelCase")]
 pub struct SecretManagerConfigSpec {
@@ -92,6 +92,32 @@ pub struct SecretManagerConfigSpec {
     /// If not specified, OpenTelemetry is disabled and standard tracing is used
     #[serde(default)]
     pub otel: Option<OtelConfig>,
+    /// GitRepository pull update interval
+    /// How often to check for updates from the GitRepository source
+    /// Format: Kubernetes duration string (e.g., "1m", "5m", "1h")
+    /// Minimum: 1m (60 seconds) - shorter intervals may hit API rate limits
+    /// Default: "5m" (5 minutes)
+    /// Recommended: 5m or greater to avoid rate limiting
+    #[serde(default = "default_git_repository_pull_interval")]
+    pub git_repository_pull_interval: String,
+    /// Reconcile interval
+    /// How often to reconcile secrets between Git and cloud providers (Secret Manager or Parameter Manager)
+    /// Format: Kubernetes duration string (e.g., "1m", "30s", "5m")
+    /// Default: "1m" (1 minute)
+    #[serde(default = "default_reconcile_interval")]
+    pub reconcile_interval: String,
+    /// Enable diff discovery
+    /// When enabled, detects if secrets have been tampered with in Secret Manager or Parameter Manager
+    /// and logs warnings when differences are found between Git (source of truth) and cloud provider
+    /// Default: true (enabled)
+    #[serde(default = "default_true")]
+    pub diff_discovery: bool,
+    /// Enable update triggers
+    /// When enabled, automatically updates cloud provider secrets if Git values have changed since last pull
+    /// This ensures Git remains the source of truth
+    /// Default: true (enabled)
+    #[serde(default = "default_true")]
+    pub trigger_update: bool,
 }
 
 /// Cloud provider configuration
@@ -418,12 +444,32 @@ fn default_source_kind() -> String {
     "GitRepository".to_string()
 }
 
+fn default_git_repository_pull_interval() -> String {
+    "5m".to_string()
+}
+
+fn default_reconcile_interval() -> String {
+    "1m".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// Status of the SecretManagerConfig resource
 ///
 /// Tracks reconciliation state, errors, and metrics.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SecretManagerConfigStatus {
+    /// Current phase of reconciliation
+    /// Values: Pending, Started, Cloning, Updating, Failed, Ready
+    #[serde(default)]
+    pub phase: Option<String>,
+    /// Human-readable description of current state
+    /// Examples: "Clone failed, repo unavailable", "Reconciling secrets to Secret Manager", "Reconciling properties to Parameter Manager"
+    #[serde(default)]
+    pub description: Option<String>,
     /// Conditions represent the latest available observations
     #[serde(default)]
     pub conditions: Vec<Condition>,
@@ -588,38 +634,123 @@ async fn main() -> Result<()> {
     // Create controller with any_semantic() to watch for all semantic changes (create, update, delete)
     // This ensures the controller picks up newly created resources
     info!("Starting controller watch loop...");
-    Controller::new(configs, watcher::Config::default().any_semantic())
-        .shutdown_on_signal()
-        .run(
-            |obj, ctx| {
-                let reconciler = ctx.clone();
+    
+    // Set up graceful shutdown handler - mark server as not ready when shutting down
+    let server_state_shutdown = server_state.clone();
+    
+    // Use Arc for shared backoff state
+    let backoff_duration_ms = Arc::new(std::sync::atomic::AtomicU64::new(1000)); // Start with 1 second
+    let max_backoff_ms = 30_000; // 30 seconds max
+    
+    // Set up shutdown signal handler - mark server as not ready when SIGTERM received
+    let shutdown_server_state = server_state_shutdown.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        info!("Received shutdown signal (SIGINT/SIGTERM), initiating graceful shutdown...");
+        shutdown_server_state.is_ready.store(false, std::sync::atomic::Ordering::Relaxed);
+        info!("Marked server as not ready, waiting for in-flight reconciliations to complete...");
+    });
+    
+    // Run controller with improved error handling and automatic restart
+    loop {
+        // Check if we should shut down before starting/restarting watch
+        if !server_state_shutdown.is_ready.load(std::sync::atomic::Ordering::Relaxed) {
+            info!("Shutdown requested, exiting watch loop");
+            break;
+        }
+        
+        let backoff_clone = backoff_duration_ms.clone();
+        let controller_future = Controller::new(configs.clone(), watcher::Config::default().any_semantic())
+            .shutdown_on_signal()
+            .run(
+                |obj, ctx| {
+                    let reconciler = ctx.clone();
+                    async move {
+                        info!("Reconciling SecretManagerConfig: {}", 
+                            obj.metadata.name.as_deref().unwrap_or("unknown"));
+                        Reconciler::reconcile(obj, reconciler.clone()).await
+                    }
+                },
+                |obj, error, _ctx| {
+                    error!(
+                        "Reconciliation error for {}: {:?}",
+                        obj.metadata.name.as_deref().unwrap_or("unknown"),
+                        error
+                    );
+                    observability::metrics::increment_reconciliation_errors();
+                    Action::requeue(std::time::Duration::from_secs(60))
+                },
+                reconciler.clone(),
+            )
+            .filter_map(move |x| {
+                let backoff = backoff_clone.clone();
                 async move {
-                    info!("Reconciling SecretManagerConfig: {}", 
-                        obj.metadata.name.as_deref().unwrap_or("unknown"));
-                    Reconciler::reconcile(obj, reconciler.clone()).await
+                    match &x {
+                        Ok(_) => {
+                            // Successful event, reset backoff on success
+                            backoff.store(1000, std::sync::atomic::Ordering::Relaxed);
+                            Some(x)
+                        }
+                        Err(e) => {
+                            // Handle watch errors with proper classification
+                            let error_string = format!("{:?}", e);
+                            
+                            // Check for specific error types
+                            let is_410 = error_string.contains("410") 
+                                || error_string.contains("too old resource version") 
+                                || error_string.contains("Expired")
+                                || error_string.contains("Gone");
+                            let is_429 = error_string.contains("429") 
+                                || error_string.contains("storage is (re)initializing") 
+                                || error_string.contains("TooManyRequests");
+                            let is_not_found = error_string.contains("ObjectNotFound") 
+                                || (error_string.contains("404") && error_string.contains("not found"));
+                            
+                            if is_410 {
+                                // Resource version expired - this is normal during pod restarts
+                                warn!("Watch resource version expired (410) - this is normal during pod restarts, watch will restart");
+                                None // Filter out to allow restart
+                            } else if is_429 {
+                                // Storage reinitializing - back off and let it restart
+                                let current_backoff = backoff.load(std::sync::atomic::Ordering::Relaxed);
+                                warn!("API server storage reinitializing (429), backing off for {}ms before restart...", current_backoff);
+                                tokio::time::sleep(std::time::Duration::from_millis(current_backoff)).await;
+                                // Exponential backoff, max 30 seconds
+                                let new_backoff = std::cmp::min(current_backoff * 2, max_backoff_ms);
+                                backoff.store(new_backoff, std::sync::atomic::Ordering::Relaxed);
+                                None // Filter out to allow restart
+                            } else if is_not_found {
+                                // Resource not found - this is normal for deleted resources
+                                warn!("Resource not found (likely deleted), continuing watch...");
+                                Some(x) // Continue - this is expected
+                            } else {
+                                // Other errors - log but continue
+                                error!("Controller stream error: {:?}", e);
+                                // For unknown errors, wait a bit before restarting
+                                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                None // Filter out to allow restart
+                            }
+                        }
+                    }
                 }
-            },
-            |obj, error, _ctx| {
-                error!(
-                    "Reconciliation error for {}: {:?}",
-                    obj.metadata.name.as_deref().unwrap_or("unknown"),
-                    error
-                );
-                observability::metrics::increment_reconciliation_errors();
-                Action::requeue(std::time::Duration::from_secs(60))
-            },
-            reconciler.clone(),
-        )
-        .filter_map(|x| async move { 
-            if let Err(e) = &x {
-                error!("Controller stream error: {:?}", e);
-            }
-            std::result::Result::ok(x) 
-        })
-        .for_each(|_| futures::future::ready(()))
-        .await;
+            })
+            .for_each(|_| futures::future::ready(()));
+        
+        // Run controller - check for shutdown before and after
+        controller_future.await;
+        
+        // Check if shutdown was requested
+        if !server_state_shutdown.is_ready.load(std::sync::atomic::Ordering::Relaxed) {
+            info!("Shutdown requested, exiting watch loop");
+            break;
+        }
+        
+        // Controller stream ended - restart watch
+        warn!("Controller watch stream ended, restarting in 1 second...");
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
 
-    info!("Controller stopped");
+    info!("Controller stopped gracefully");
 
     // Shutdown OpenTelemetry tracer provider if it was initialized
     observability::otel::shutdown_otel(otel_tracer_provider);
