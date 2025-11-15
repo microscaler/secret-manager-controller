@@ -32,6 +32,10 @@ pub struct SecretManagerConfigSpec {
     pub source_ref: SourceRef,
     pub provider: ProviderConfig,
     pub secrets: SecretsConfig,
+    /// Config store configuration for routing application.properties to config stores
+    /// When enabled, properties are stored individually in config stores instead of as a JSON blob in secret stores
+    #[serde(default)]
+    pub configs: Option<ConfigsConfig>,
     #[serde(default)]
     pub otel: Option<OtelConfig>,
 }
@@ -101,6 +105,37 @@ pub struct SecretsConfig {
     pub prefix: Option<String>,
     #[serde(default)]
     pub suffix: Option<String>,
+}
+
+/// Config store configuration for routing application.properties to config stores
+/// When enabled, properties are stored individually in config stores instead of as a JSON blob in secret stores
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigsConfig {
+    /// Enable config store sync (default: false for backward compatibility)
+    /// When true, application.properties files are routed to config stores
+    /// When false, properties are stored as a JSON blob in secret stores (current behavior)
+    #[serde(default)]
+    pub enabled: bool,
+    /// GCP-specific: Store type (default: SecretManager)
+    /// Only applies when provider.type == gcp
+    /// - SecretManager: Store configs as individual secrets in Secret Manager (interim solution)
+    /// - ParameterManager: Store configs in Parameter Manager (future, after ESO contribution)
+    #[serde(default)]
+    pub store: Option<ConfigStoreType>,
+}
+
+/// GCP config store type
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ConfigStoreType {
+    /// Store configs as individual secrets in Secret Manager (interim solution)
+    /// This is the default and recommended interim approach until Parameter Manager support is contributed to ESO
+    SecretManager,
+    /// Store configs in Parameter Manager (future)
+    /// Requires ESO contribution for Kubernetes consumption
+    #[serde(rename = "ParameterManager")]
+    ParameterManager,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

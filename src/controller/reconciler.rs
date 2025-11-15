@@ -766,28 +766,81 @@ impl Reconciler {
             );
         }
 
-        // Store properties as a single secret (JSON encoded)
+        // Store properties - route to config store if enabled, otherwise store as JSON blob in secret store
         if !properties.is_empty() {
-            let properties_json = serde_json::to_string(&properties)?;
-            let secret_name = construct_secret_name(
-                Some(secret_prefix),
-                "properties",
-                config.spec.secrets.suffix.as_deref(),
-            );
-            match provider
-                .create_or_update_secret(&secret_name, &properties_json)
-                .await
-            {
-                Ok(was_updated) => {
-                    count += 1;
-                    if was_updated {
-                        observability::metrics::increment_secrets_updated(1);
-                        info!("Updated properties secret {} from git", secret_name);
+            let configs_enabled = config
+                .spec
+                .configs
+                .as_ref()
+                .map(|c| c.enabled)
+                .unwrap_or(false);
+
+            if configs_enabled {
+                // Route properties to config store (store individually)
+                info!(
+                    "Config store enabled: storing {} properties individually",
+                    properties.len()
+                );
+                let mut config_count = 0;
+                let mut config_updated_count = 0;
+
+                for (key, value) in properties {
+                    // Construct secret name for config (using same naming convention as secrets)
+                    // For GCP Secret Manager, we store configs as individual secrets
+                    let config_name = construct_secret_name(
+                        Some(secret_prefix),
+                        key.as_str(),
+                        config.spec.secrets.suffix.as_deref(),
+                    );
+                    match provider.create_or_update_secret(&config_name, &value).await {
+                        Ok(was_updated) => {
+                            config_count += 1;
+                            if was_updated {
+                                config_updated_count += 1;
+                                info!(
+                                    "Updated config {} from git (GitOps source of truth)",
+                                    config_name
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to store config {}: {}", config_name, e);
+                            return Err(e.context(format!("Failed to store config: {config_name}")));
+                        }
                     }
                 }
-                Err(e) => {
-                    error!("Failed to store properties: {}", e);
-                    return Err(e.context("Failed to store properties"));
+
+                count += config_count;
+                if config_updated_count > 0 {
+                    observability::metrics::increment_secrets_updated(i64::from(config_updated_count));
+                    warn!(
+                        "Updated {} configs from git (GitOps source of truth). Manual changes in cloud provider were overwritten.",
+                        config_updated_count
+                    );
+                }
+            } else {
+                // Backward compatibility: store properties as a single secret (JSON encoded)
+                let properties_json = serde_json::to_string(&properties)?;
+                let secret_name = construct_secret_name(
+                    Some(secret_prefix),
+                    "properties",
+                    config.spec.secrets.suffix.as_deref(),
+                );
+                match provider
+                    .create_or_update_secret(&secret_name, &properties_json)
+                    .await
+                {
+                    Ok(was_updated) => {
+                        count += 1;
+                        if was_updated {
+                            observability::metrics::increment_secrets_updated(1);
+                            info!("Updated properties secret {} from git", secret_name);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to store properties: {}", e);
+                        return Err(e.context("Failed to store properties"));
+                    }
                 }
             }
         }
