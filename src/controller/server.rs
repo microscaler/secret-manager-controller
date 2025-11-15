@@ -24,12 +24,16 @@ pub async fn start_server(port: u16, state: Arc<ServerState>) -> Result<(), anyh
         .route("/metrics", get(metrics_handler))
         .route("/healthz", get(healthz_handler))
         .route("/readyz", get(readyz_handler))
-        .with_state(state);
+        .with_state(state.clone());
 
     let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr).await?;
 
     info!("HTTP server listening on {}", addr);
+    
+    // Mark server as ready once it's bound and listening
+    // This ensures readiness probes pass immediately after server starts
+    state.is_ready.store(true, std::sync::atomic::Ordering::Relaxed);
 
     axum::serve(listener, app).await?;
 

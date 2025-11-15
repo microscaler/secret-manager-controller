@@ -503,17 +503,49 @@ async fn main() -> Result<()> {
     });
 
     // Start HTTP server for metrics and probes
+    // We start it in a background task but wait for it to be ready before proceeding
     let server_state_clone = server_state.clone();
     let server_port = std::env::var("METRICS_PORT")
         .unwrap_or_else(|_| "5000".to_string())
         .parse::<u16>()
         .unwrap_or(5000);
 
-    tokio::spawn(async move {
+    // Start server in background task
+    let server_handle = tokio::spawn(async move {
         if let Err(e) = start_server(server_port, server_state_clone).await {
             error!("HTTP server error: {}", e);
         }
     });
+
+    // Poll server startup - wait for it to be ready before proceeding
+    // This ensures readiness probes pass immediately after server starts
+    let startup_timeout = std::time::Duration::from_secs(10);
+    let poll_interval = std::time::Duration::from_millis(50);
+    let start_time = std::time::Instant::now();
+    
+    loop {
+        // Check if server task crashed
+        if server_handle.is_finished() {
+            return Err(anyhow::anyhow!("HTTP server failed to start"));
+        }
+        
+        // Check if server is ready (set by start_server once bound)
+        if server_state.is_ready.load(std::sync::atomic::Ordering::Relaxed) {
+            info!("HTTP server is ready and accepting connections");
+            break;
+        }
+        
+        // Check timeout
+        if start_time.elapsed() > startup_timeout {
+            return Err(anyhow::anyhow!(
+                "HTTP server failed to become ready within {} seconds",
+                startup_timeout.as_secs()
+            ));
+        }
+        
+        // Wait before next poll
+        tokio::time::sleep(poll_interval).await;
+    }
 
     // Create Kubernetes client
     let client = Client::try_default().await?;
@@ -549,10 +581,9 @@ async fn main() -> Result<()> {
     // Create reconciler context
     let reconciler = Arc::new(Reconciler::new(client.clone()).await?);
 
-    // Mark as ready
-    server_state
-        .is_ready
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    // Server is already marked as ready by start_server() once it binds
+    // This ensures readiness probes pass before we start reconciling
+    info!("Controller initialized, starting watch loop...");
 
     // Create controller with any_semantic() to watch for all semantic changes (create, update, delete)
     // This ensures the controller picks up newly created resources
