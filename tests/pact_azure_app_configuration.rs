@@ -9,7 +9,6 @@
 //! - DELETE /kv/{key} - Delete a key-value pair
 
 use pact_consumer::prelude::*;
-use reqwest;
 use serde_json::json;
 
 // Helper function to make HTTP requests to the mock server
@@ -23,7 +22,7 @@ async fn make_request(
         "GET" => client.get(url),
         "PUT" => client.put(url),
         "DELETE" => client.delete(url),
-        _ => panic!("Unsupported HTTP method: {}", method),
+        _ => panic!("Unsupported HTTP method: {method}"),
     };
 
     request = request
@@ -75,7 +74,7 @@ async fn test_azure_app_config_put_key_value_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/kv", base_url);
+    let mock_url = format!("{base_url}/kv");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -130,7 +129,7 @@ async fn test_azure_app_config_get_key_value_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/kv/my-service:prod:database.host", base_url);
+    let mock_url = format!("{base_url}/kv/my-service:prod:database.host");
 
     let client = reqwest::Client::new();
     let response = make_request(&client, "GET", &mock_url, None)
@@ -169,7 +168,7 @@ async fn test_azure_app_config_get_key_value_not_found_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/kv/my-service:prod:nonexistent.key", base_url);
+    let mock_url = format!("{base_url}/kv/my-service:prod:nonexistent.key");
 
     let client = reqwest::Client::new();
     let response = make_request(&client, "GET", &mock_url, None)
@@ -204,7 +203,7 @@ async fn test_azure_app_config_delete_key_value_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/kv/my-service:prod:database.host", base_url);
+    let mock_url = format!("{base_url}/kv/my-service:prod:database.host");
 
     let client = reqwest::Client::new();
     let response = make_request(&client, "DELETE", &mock_url, None)
@@ -239,7 +238,7 @@ async fn test_azure_app_config_delete_key_value_not_found_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/kv/my-service:prod:nonexistent.key", base_url);
+    let mock_url = format!("{base_url}/kv/my-service:prod:nonexistent.key");
 
     let client = reqwest::Client::new();
     let response = make_request(&client, "DELETE", &mock_url, None)
@@ -289,7 +288,7 @@ async fn test_azure_app_config_update_existing_key_value_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/kv", base_url);
+    let mock_url = format!("{base_url}/kv");
 
     let client = reqwest::Client::new();
     let response = make_request(

@@ -47,4 +47,13 @@ spec:
       # auth:
       #   authType: WorkloadIdentity
       #   serviceAccountEmail: secret-manager-controller@your-project.iam.gserviceaccount.com
+  
+  # Reconcile interval - how often to reconcile secrets between Git and cloud providers
+  # Dev environment: 1 minute (default)
+  reconcileInterval: "1m"
+  
+  # GitRepository pull update interval
+  # How often to check for updates from the GitRepository source
+  # Dev environment: 1 minute (default)
+  gitRepositoryPullInterval: "1m"
 

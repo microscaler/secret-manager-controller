@@ -15,6 +15,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
+#[derive(Debug)]
 pub struct ServerState {
     pub is_ready: Arc<std::sync::atomic::AtomicBool>,
 }

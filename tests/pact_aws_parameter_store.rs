@@ -18,7 +18,7 @@ async fn make_request(
         "GET" => client.get(url),
         "POST" => client.post(url),
         "PUT" => client.put(url),
-        _ => panic!("Unsupported HTTP method: {}", method),
+        _ => panic!("Unsupported HTTP method: {method}"),
     };
 
     // Add default headers
@@ -82,7 +82,7 @@ async fn test_aws_put_parameter_create_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -148,7 +148,7 @@ async fn test_aws_put_parameter_update_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -209,7 +209,7 @@ async fn test_aws_get_parameter_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -268,7 +268,7 @@ async fn test_aws_get_parameter_not_found_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -326,7 +326,7 @@ async fn test_aws_delete_parameter_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -395,7 +395,7 @@ async fn test_aws_get_parameters_by_path_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
