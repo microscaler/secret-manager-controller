@@ -230,99 +230,91 @@ local_resource(
     'pact-tests-and-publish',
     cmd='''
         # Wait for Pact broker to be ready
-        echo "⏳ Waiting for Pact broker to be ready..."
         kubectl wait --for=condition=ready pod -l app=pact-broker -n secret-manager-controller-pact-broker --timeout=120s || {
-            echo "❌ Pact broker not ready"
             exit 1
         }
         
         # Set up port forwarding in background
-        echo "🔌 Setting up port forwarding to Pact broker..."
         kubectl port-forward -n secret-manager-controller-pact-broker service/pact-broker 9292:9292 > /tmp/pact-port-forward.log 2>&1 &
         PORT_FORWARD_PID=$!
         sleep 3
         
         # Check if port forward is working
         if ! curl -s -u pact:pact http://localhost:9292 > /dev/null 2>&1; then
-            echo "❌ Failed to connect to Pact broker"
             kill $PORT_FORWARD_PID 2>/dev/null || true
             exit 1
         fi
         
-        echo "✅ Pact broker is ready"
-        
         # Run Pact tests (this generates pact files)
-        echo "🧪 Running Pact contract tests..."
-        
-        # Run tests and capture output
-        cargo test --test pact_* --no-fail-fast 2>&1 | tee /tmp/pact-tests.log
-        TEST_EXIT_CODE=${PIPESTATUS[0]}
+        cargo test --test pact_* --no-fail-fast
+        TEST_EXIT_CODE=$?
         
         # Find and publish Pact files using Pact CLI
+        # Publish each provider's contracts separately with provider-specific versions
         PACT_DIR="target/pacts"
         if [ -d "$PACT_DIR" ] && [ "$(ls -A $PACT_DIR/*.json 2>/dev/null)" ]; then
-            echo "📦 Publishing Pact contracts to broker..."
-            
             # Get git info for versioning
+            # Add timestamp to ensure unique version for each publish (prevents race conditions)
             GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
             GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
-            VERSION="${GIT_BRANCH}-${GIT_COMMIT}"
+            TIMESTAMP=$(date +%s)
             
-            # Check if pact-broker CLI is available, if not use Docker
-            PUBLISH_EXIT_CODE=0
-            if command -v pact-broker &> /dev/null; then
-                # Use local Pact CLI
-                echo "  Using local Pact CLI..."
-                if ! pact-broker publish "$PACT_DIR" \
-                    --consumer-app-version "$VERSION" \
-                    --branch "$GIT_BRANCH" \
-                    --broker-base-url http://localhost:9292 \
-                    --broker-username pact \
-                    --broker-password pact; then
-                    PUBLISH_EXIT_CODE=$?
-                fi
-            else
-                # Use Docker image for Pact CLI
-                # Note: Use host.docker.internal to access localhost from Docker container
-                # On Linux, we may need --network host instead
-                echo "  Using Pact CLI Docker image..."
-                if ! docker run --rm \
-                    --add-host=host.docker.internal:host-gateway \
-                    -v "$(pwd):/pacts" \
-                    -w /pacts \
-                    pactfoundation/pact-cli:latest \
-                    publish "$PACT_DIR" \
-                    --consumer-app-version "$VERSION" \
-                    --branch "$GIT_BRANCH" \
-                    --broker-base-url http://host.docker.internal:9292 \
-                    --broker-username pact \
-                    --broker-password pact; then
-                    PUBLISH_EXIT_CODE=$?
-                fi
-            fi
+            # Publish each provider's contracts separately
+            # Provider names: gcp, aws, azure
+            PROVIDERS=("gcp" "aws" "azure")
+            PROVIDER_NAMES=("GCP-Secret-Manager" "AWS-Secrets-Manager" "Azure-Key-Vault")
             
-            if [ $PUBLISH_EXIT_CODE -eq 0 ]; then
-                echo "✅ Published Pact contracts to broker"
-                echo "   Version: $VERSION"
-                echo "   Branch: $GIT_BRANCH"
-                echo "   View at: http://localhost:9292"
-            else
-                echo "⚠️  Failed to publish contracts (exit code: $PUBLISH_EXIT_CODE)"
-                echo "   Check that port forwarding is active and broker is accessible"
-            fi
-        else
-            echo "ℹ️  No Pact files found in $PACT_DIR"
-            echo "   Pact files are generated when tests run successfully"
+            for i in "${!PROVIDERS[@]}"; do
+                PROVIDER="${PROVIDERS[$i]}"
+                PROVIDER_NAME="${PROVIDER_NAMES[$i]}"
+                
+                # Find pact files for this provider
+                PROVIDER_PACTS=$(find "$PACT_DIR" -name "*${PROVIDER_NAME}*.json" 2>/dev/null || true)
+                
+                if [ -n "$PROVIDER_PACTS" ]; then
+                    # Create temporary directory for this provider's pacts
+                    TEMP_PACT_DIR=$(mktemp -d)
+                    cp $PROVIDER_PACTS "$TEMP_PACT_DIR/"
+                    
+                    # Create provider-specific version: provider-branch-commit-timestamp
+                    VERSION="${PROVIDER}-${GIT_BRANCH}-${GIT_COMMIT}-${TIMESTAMP}"
+                    
+                    # Check if pact-broker CLI is available, if not use Docker
+                    if command -v pact-broker &> /dev/null; then
+                        # Use local Pact CLI
+                        pact-broker publish "$TEMP_PACT_DIR" \
+                            --consumer-app-version "$VERSION" \
+                            --branch "$GIT_BRANCH" \
+                            --broker-base-url http://localhost:9292 \
+                            --broker-username pact \
+                            --broker-password pact
+                    else
+                        # Use Docker image for Pact CLI
+                        # Note: Use host.docker.internal to access localhost from Docker container
+                        # On Linux, we may need --network host instead
+                        # Mount the temp directory so Docker can access it
+                        TEMP_PACT_DIR_BASE=$(basename "$TEMP_PACT_DIR")
+                        docker run --rm \
+                            --add-host=host.docker.internal:host-gateway \
+                            -v "$TEMP_PACT_DIR:/pacts/$TEMP_PACT_DIR_BASE" \
+                            -w "/pacts/$TEMP_PACT_DIR_BASE" \
+                            pactfoundation/pact-cli:latest \
+                            publish . \
+                            --consumer-app-version "$VERSION" \
+                            --branch "$GIT_BRANCH" \
+                            --broker-base-url http://host.docker.internal:9292 \
+                            --broker-username pact \
+                            --broker-password pact
+                    fi
+                    
+                    # Clean up temp directory
+                    rm -rf "$TEMP_PACT_DIR"
+                fi
+            done
         fi
         
         # Clean up port forward
         kill $PORT_FORWARD_PID 2>/dev/null || true
-        
-        if [ $TEST_EXIT_CODE -eq 0 ]; then
-            echo "✅ Pact tests passed"
-        else
-            echo "⚠️  Some Pact tests failed (exit code: $TEST_EXIT_CODE)"
-        fi
         
         exit $TEST_EXIT_CODE
     ''',

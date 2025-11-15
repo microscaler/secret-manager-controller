@@ -325,3 +325,451 @@ async fn test_aws_secret_not_found_contract() {
     let body: serde_json::Value = response.json().await.expect("Failed to parse response");
     assert_eq!(body["__type"], "ResourceNotFoundException");
 }
+
+#[tokio::test]
+async fn test_aws_list_secrets_contract() {
+    let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
+
+    pact_builder
+        .interaction("list secrets in AWS Secrets Manager", "", |mut i| {
+            i.given("AWS credentials are configured");
+            i.request
+                .method("POST")
+                .path("/")
+                .header("content-type", "application/x-amz-json-1.1")
+                .header("x-amz-target", "secretsmanager.ListSecrets")
+                .header("authorization", "AWS4-HMAC-SHA256 Credential=test/20240101/us-east-1/secretsmanager/aws4_request")
+                .body(json!({}).to_string());
+            i.response
+                .status(200)
+                .header("content-type", "application/x-amz-json-1.1")
+                .json_body(json!({
+                    "SecretList": [
+                        {
+                            "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:secret-1-abc123",
+                            "Name": "secret-1",
+                            "LastChangedDate": 1704067200.0
+                        },
+                        {
+                            "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:secret-2-def456",
+                            "Name": "secret-2",
+                            "LastChangedDate": 1704153600.0
+                        }
+                    ],
+                    "NextToken": null
+                }));
+            i
+        });
+
+    let mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+    let mock_url = format!("{}/", base_url);
+
+    let client = reqwest::Client::new();
+    let response = make_request(
+        &client,
+        "POST",
+        &mock_url,
+        Some(json!({})),
+        "secretsmanager.ListSecrets",
+    )
+    .await
+    .expect("Failed to make request");
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(body["SecretList"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn test_aws_list_secret_version_ids_contract() {
+    let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
+
+    pact_builder
+        .interaction("list secret version IDs", "", |mut i| {
+            i.given("a secret exists with multiple versions");
+            i.request
+                .method("POST")
+                .path("/")
+                .header("content-type", "application/x-amz-json-1.1")
+                .header("x-amz-target", "secretsmanager.ListSecretVersionIds")
+                .header("authorization", "AWS4-HMAC-SHA256 Credential=test/20240101/us-east-1/secretsmanager/aws4_request")
+                .body(json!({
+                    "SecretId": "test-secret-name"
+                }).to_string());
+            i.response
+                .status(200)
+                .header("content-type", "application/x-amz-json-1.1")
+                .json_body(json!({
+                    "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-secret-name-abc123",
+                    "Name": "test-secret-name",
+                    "Versions": [
+                        {
+                            "VersionId": "version-1",
+                            "VersionStages": ["AWSCURRENT"],
+                            "CreatedDate": 1704067200.0
+                        },
+                        {
+                            "VersionId": "version-2",
+                            "VersionStages": [],
+                            "CreatedDate": 1704153600.0
+                        }
+                    ],
+                    "NextToken": null
+                }));
+            i
+        });
+
+    let mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+    let mock_url = format!("{}/", base_url);
+
+    let client = reqwest::Client::new();
+    let response = make_request(
+        &client,
+        "POST",
+        &mock_url,
+        Some(json!({
+            "SecretId": "test-secret-name"
+        })),
+        "secretsmanager.ListSecretVersionIds",
+    )
+    .await
+    .expect("Failed to make request");
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(body["Versions"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn test_aws_delete_secret_contract() {
+    let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
+
+    pact_builder
+        .interaction("delete a secret", "", |mut i| {
+            i.given("a secret exists in AWS Secrets Manager");
+            i.request
+                .method("POST")
+                .path("/")
+                .header("content-type", "application/x-amz-json-1.1")
+                .header("x-amz-target", "secretsmanager.DeleteSecret")
+                .header("authorization", "AWS4-HMAC-SHA256 Credential=test/20240101/us-east-1/secretsmanager/aws4_request")
+                .body(json!({
+                    "SecretId": "test-secret-name",
+                    "ForceDeleteWithoutRecovery": true
+                }).to_string());
+            i.response
+                .status(200)
+                .header("content-type", "application/x-amz-json-1.1")
+                .json_body(json!({
+                    "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-secret-name-abc123",
+                    "Name": "test-secret-name",
+                    "DeletionDate": 1704067200.0
+                }));
+            i
+        });
+
+    let mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+    let mock_url = format!("{}/", base_url);
+
+    let client = reqwest::Client::new();
+    let response = make_request(
+        &client,
+        "POST",
+        &mock_url,
+        Some(json!({
+            "SecretId": "test-secret-name",
+            "ForceDeleteWithoutRecovery": true
+        })),
+        "secretsmanager.DeleteSecret",
+    )
+    .await
+    .expect("Failed to make request");
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(body["Name"], "test-secret-name");
+}
+
+#[tokio::test]
+async fn test_aws_tag_secret_contract() {
+    let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
+
+    pact_builder
+        .interaction("tag a secret", "", |mut i| {
+            i.given("a secret exists in AWS Secrets Manager");
+            i.request
+                .method("POST")
+                .path("/")
+                .header("content-type", "application/x-amz-json-1.1")
+                .header("x-amz-target", "secretsmanager.TagResource")
+                .header("authorization", "AWS4-HMAC-SHA256 Credential=test/20240101/us-east-1/secretsmanager/aws4_request")
+                .body(json!({
+                    "SecretId": "test-secret-name",
+                    "Tags": [
+                        {
+                            "Key": "Environment",
+                            "Value": "Production"
+                        },
+                        {
+                            "Key": "Team",
+                            "Value": "DevOps"
+                        }
+                    ]
+                }).to_string());
+            i.response
+                .status(200)
+                .header("content-type", "application/x-amz-json-1.1")
+                .json_body(json!({}));
+            i
+        });
+
+    let mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+    let mock_url = format!("{}/", base_url);
+
+    let client = reqwest::Client::new();
+    let response = make_request(
+        &client,
+        "POST",
+        &mock_url,
+        Some(json!({
+            "SecretId": "test-secret-name",
+            "Tags": [
+                {
+                    "Key": "Environment",
+                    "Value": "Production"
+                },
+                {
+                    "Key": "Team",
+                    "Value": "DevOps"
+                }
+            ]
+        })),
+        "secretsmanager.TagResource",
+    )
+    .await
+    .expect("Failed to make request");
+
+    assert_eq!(response.status(), 200);
+}
+
+#[tokio::test]
+async fn test_aws_untag_secret_contract() {
+    let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
+
+    pact_builder
+        .interaction("untag a secret", "", |mut i| {
+            i.given("a secret exists with tags");
+            i.request
+                .method("POST")
+                .path("/")
+                .header("content-type", "application/x-amz-json-1.1")
+                .header("x-amz-target", "secretsmanager.UntagResource")
+                .header("authorization", "AWS4-HMAC-SHA256 Credential=test/20240101/us-east-1/secretsmanager/aws4_request")
+                .body(json!({
+                    "SecretId": "test-secret-name",
+                    "TagKeys": ["Environment", "Team"]
+                }).to_string());
+            i.response
+                .status(200)
+                .header("content-type", "application/x-amz-json-1.1")
+                .json_body(json!({}));
+            i
+        });
+
+    let mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+    let mock_url = format!("{}/", base_url);
+
+    let client = reqwest::Client::new();
+    let response = make_request(
+        &client,
+        "POST",
+        &mock_url,
+        Some(json!({
+            "SecretId": "test-secret-name",
+            "TagKeys": ["Environment", "Team"]
+        })),
+        "secretsmanager.UntagResource",
+    )
+    .await
+    .expect("Failed to make request");
+
+    assert_eq!(response.status(), 200);
+}
+
+#[tokio::test]
+async fn test_aws_update_secret_contract() {
+    let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
+
+    pact_builder
+        .interaction("update secret metadata", "", |mut i| {
+            i.given("a secret exists in AWS Secrets Manager");
+            i.request
+                .method("POST")
+                .path("/")
+                .header("content-type", "application/x-amz-json-1.1")
+                .header("x-amz-target", "secretsmanager.UpdateSecret")
+                .header("authorization", "AWS4-HMAC-SHA256 Credential=test/20240101/us-east-1/secretsmanager/aws4_request")
+                .body(json!({
+                    "SecretId": "test-secret-name",
+                    "Description": "Updated description"
+                }).to_string());
+            i.response
+                .status(200)
+                .header("content-type", "application/x-amz-json-1.1")
+                .json_body(json!({
+                    "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-secret-name-abc123",
+                    "Name": "test-secret-name",
+                    "VersionId": "current-version-id"
+                }));
+            i
+        });
+
+    let mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+    let mock_url = format!("{}/", base_url);
+
+    let client = reqwest::Client::new();
+    let response = make_request(
+        &client,
+        "POST",
+        &mock_url,
+        Some(json!({
+            "SecretId": "test-secret-name",
+            "Description": "Updated description"
+        })),
+        "secretsmanager.UpdateSecret",
+    )
+    .await
+    .expect("Failed to make request");
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(body["Name"], "test-secret-name");
+}
+
+#[tokio::test]
+async fn test_aws_restore_secret_contract() {
+    let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
+
+    pact_builder
+        .interaction("restore a deleted secret", "", |mut i| {
+            i.given("a deleted secret exists");
+            i.request
+                .method("POST")
+                .path("/")
+                .header("content-type", "application/x-amz-json-1.1")
+                .header("x-amz-target", "secretsmanager.RestoreSecret")
+                .header("authorization", "AWS4-HMAC-SHA256 Credential=test/20240101/us-east-1/secretsmanager/aws4_request")
+                .body(json!({
+                    "SecretId": "test-secret-name"
+                }).to_string());
+            i.response
+                .status(200)
+                .header("content-type", "application/x-amz-json-1.1")
+                .json_body(json!({
+                    "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-secret-name-abc123",
+                    "Name": "test-secret-name"
+                }));
+            i
+        });
+
+    let mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+    let mock_url = format!("{}/", base_url);
+
+    let client = reqwest::Client::new();
+    let response = make_request(
+        &client,
+        "POST",
+        &mock_url,
+        Some(json!({
+            "SecretId": "test-secret-name"
+        })),
+        "secretsmanager.RestoreSecret",
+    )
+    .await
+    .expect("Failed to make request");
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(body["Name"], "test-secret-name");
+}
+
+#[tokio::test]
+async fn test_aws_get_resource_policy_contract() {
+    let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "AWS-Secrets-Manager");
+
+    pact_builder
+        .interaction("get resource policy for a secret", "", |mut i| {
+            i.given("a secret exists with a resource policy");
+            i.request
+                .method("POST")
+                .path("/")
+                .header("content-type", "application/x-amz-json-1.1")
+                .header("x-amz-target", "secretsmanager.GetResourcePolicy")
+                .header("authorization", "AWS4-HMAC-SHA256 Credential=test/20240101/us-east-1/secretsmanager/aws4_request")
+                .body(json!({
+                    "SecretId": "test-secret-name"
+                }).to_string());
+            i.response
+                .status(200)
+                .header("content-type", "application/x-amz-json-1.1")
+                .json_body(json!({
+                    "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-secret-name-abc123",
+                    "Name": "test-secret-name",
+                    "ResourcePolicy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::123456789012:root\"},\"Action\":\"secretsmanager:GetSecretValue\",\"Resource\":\"*\"}]}"
+                }));
+            i
+        });
+
+    let mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+    let mock_url = format!("{}/", base_url);
+
+    let client = reqwest::Client::new();
+    let response = make_request(
+        &client,
+        "POST",
+        &mock_url,
+        Some(json!({
+            "SecretId": "test-secret-name"
+        })),
+        "secretsmanager.GetResourcePolicy",
+    )
+    .await
+    .expect("Failed to make request");
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(body["Name"], "test-secret-name");
+    assert!(body["ResourcePolicy"].as_str().is_some());
+}
