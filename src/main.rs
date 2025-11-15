@@ -30,7 +30,9 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 use kube::{api::Api, Client, CustomResource};
 use kube_runtime::{controller::Action, watcher, Controller};
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::sync::Arc;
 use tracing::{error, info};
 
@@ -206,12 +208,12 @@ pub enum ConfigStoreType {
     ParameterManager,
 }
 
-impl schemars::JsonSchema for ConfigStoreType {
+impl JsonSchema for ConfigStoreType {
     fn schema_name() -> Cow<'static, str> {
         Cow::Borrowed("ConfigStoreType")
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
         // Generate a structural schema for Kubernetes CRD
         // Use enum with nullable support (not anyOf)
         let schema_value = serde_json::json!({
@@ -219,7 +221,7 @@ impl schemars::JsonSchema for ConfigStoreType {
             "enum": ["secretManager", "ParameterManager"],
             "description": "GCP config store type. SecretManager: Store configs as individual secrets in Secret Manager (interim solution). ParameterManager: Store configs in Parameter Manager (future, after ESO contribution)."
         });
-        schemars::schema::Schema::try_from(schema_value).expect("Failed to create Schema for ConfigStoreType")
+        Schema::try_from(schema_value).expect("Failed to create Schema for ConfigStoreType")
     }
 }
 
