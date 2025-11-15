@@ -355,6 +355,9 @@ pub struct Condition {
     pub message: Option<String>,
 }
 
+// main() is only flagged as unused when checking the library target,
+// but it's the entry point for the crdgen binary
+#[allow(dead_code, reason = "main() is the entry point for the crdgen binary")]
 fn main() {
     // Generate CRD YAML
     let crd = SecretManagerConfig::crd();

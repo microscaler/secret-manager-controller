@@ -90,7 +90,7 @@ static GCP_SECRET_MANAGER_OPERATION_DURATION: LazyLock<Histogram> = LazyLock::ne
     .unwrap()
 });
 
-#[allow(clippy::missing_errors_doc)]
+#[allow(clippy::missing_errors_doc, reason = "Error documentation is provided in doc comments")]
 pub fn register_metrics() -> Result<()> {
     REGISTRY.register(Box::new(RECONCILIATIONS_TOTAL.clone()))?;
     REGISTRY.register(Box::new(RECONCILIATION_ERRORS_TOTAL.clone()))?;
@@ -117,13 +117,13 @@ pub fn observe_reconciliation_duration(duration: f64) {
 }
 
 pub fn increment_secrets_synced(count: i64) {
-    #[allow(clippy::cast_sign_loss)] // We ensure non-negative with max(0)
+    #[allow(clippy::cast_sign_loss, reason = "We ensure non-negative with max(0)")]
     let count_u64 = count.max(0) as u64;
     SECRETS_SYNCED_TOTAL.inc_by(count_u64);
 }
 
 pub fn increment_secrets_updated(count: i64) {
-    #[allow(clippy::cast_sign_loss)] // We ensure non-negative with max(0)
+    #[allow(clippy::cast_sign_loss, reason = "We ensure non-negative with max(0)")]
     let count_u64 = count.max(0) as u64;
     SECRETS_UPDATED_TOTAL.inc_by(count_u64);
 }

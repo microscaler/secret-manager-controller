@@ -56,7 +56,7 @@ fn normalize_base_path(base_path: Option<&str>) -> Option<&str> {
 /// Only processes the specified environment name - does not scan all environments
 ///
 /// If `base_path` is None, searches from repository root
-#[allow(clippy::unused_async, clippy::missing_errors_doc)] // May be called from async contexts in the future
+#[allow(clippy::unused_async, clippy::missing_errors_doc, reason = "May be called from async contexts in the future, error docs in comments")]
 pub async fn find_application_files(
     artifact_path: &Path,
     base_path: Option<&str>,
@@ -215,7 +215,7 @@ impl ApplicationFiles {
 
 /// Parse secrets from application.secrets.env and application.secrets.yaml
 /// Supports SOPS-encrypted files
-#[allow(clippy::missing_errors_doc)]
+#[allow(clippy::missing_errors_doc, reason = "Error documentation is provided in doc comments")]
 pub async fn parse_secrets(
     app_files: &ApplicationFiles,
     sops_private_key: Option<&str>,
@@ -240,7 +240,7 @@ pub async fn parse_secrets(
 }
 
 /// Parse properties from application.properties
-#[allow(clippy::missing_errors_doc)]
+#[allow(clippy::missing_errors_doc, reason = "Error documentation is provided in doc comments")]
 pub async fn parse_properties(app_files: &ApplicationFiles) -> Result<HashMap<String, String>> {
     if let Some(ref path) = app_files.properties {
         debug!("Parsing properties from: {}", path.display());
@@ -592,8 +592,7 @@ async fn import_gpg_key(private_key: &str) -> Result<Option<PathBuf>> {
         // Clean up on failure
         let _ = tokio::fs::remove_dir_all(&gpg_home).await;
         Err(anyhow::anyhow!(
-            "Failed to import GPG private key: {}",
-            error_msg
+            "Failed to import GPG private key: {error_msg}"
         ))
     }
 }

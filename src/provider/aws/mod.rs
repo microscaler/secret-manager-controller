@@ -22,10 +22,18 @@ pub struct AwsSecretManager {
     _region: String,
 }
 
+impl std::fmt::Debug for AwsSecretManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsSecretManager")
+            .field("_region", &self._region)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AwsSecretManager {
     /// Create a new AWS Secrets Manager client
     /// Supports both Access Keys and IRSA (IAM Roles for Service Accounts)
-    #[allow(clippy::missing_errors_doc)]
+    #[allow(clippy::missing_errors_doc, reason = "Error documentation is provided in doc comments")]
     pub async fn new(config: &AwsConfig, k8s_client: &kube::Client) -> Result<Self> {
         let region = config.region.clone();
 

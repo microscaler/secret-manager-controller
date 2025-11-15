@@ -176,7 +176,7 @@ impl<'de> serde::Deserialize<'de> for ProviderConfig {
                             // Deserialize GcpConfig from the nested object
                             // The JSON has {"projectId": "..."} which should map to project_id via rename_all
                             gcp = Some(map.next_value::<GcpConfig>().map_err(|e| {
-                                de::Error::custom(format!("Failed to deserialize GcpConfig: {}", e))
+                                de::Error::custom(format!("Failed to deserialize GcpConfig: {e}"))
                             })?);
                         }
                         "aws" => {
@@ -705,7 +705,7 @@ Some(x)
                         }
                         Err(e) => {
 // Handle watch errors with proper classification
-let error_string = format!("{:?}", e);
+let error_string = format!("{e:?}");
 // Check for specific error types
 let is_410 = error_string.contains("410")
     || error_string.contains("too old resource version")

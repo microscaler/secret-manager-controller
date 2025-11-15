@@ -22,6 +22,14 @@ pub struct SecretManager {
     project_id: String,
 }
 
+impl std::fmt::Debug for SecretManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretManager")
+            .field("project_id", &self.project_id)
+            .finish_non_exhaustive()
+    }
+}
+
 impl SecretManager {
     /// Create a new `SecretManager` client with authentication
     /// Supports both JSON credentials and Workload Identity
@@ -36,7 +44,7 @@ impl SecretManager {
     ///
     /// # Errors
     /// Returns an error if GCP client initialization fails
-    #[allow(clippy::missing_errors_doc)]
+    #[allow(clippy::missing_errors_doc, reason = "Error documentation is provided in doc comments")]
     pub async fn new(
         project_id: String,
         _auth_type: Option<&str>,
@@ -72,7 +80,7 @@ impl SecretManager {
 
     /// Create or update secret, ensuring Git is source of truth
     /// If secret exists and value differs, creates new version and disables old versions
-    #[allow(clippy::missing_errors_doc)]
+    #[allow(clippy::missing_errors_doc, reason = "Error documentation is provided in doc comments")]
     async fn create_or_update_secret_impl(
         &self,
         secret_name: &str,
@@ -102,7 +110,7 @@ impl SecretManager {
                 .with_request(create_request)
                 .send()
                 .await
-                .context(format!("Failed to create GCP secret: {}", secret_name))?;
+                .context(format!("Failed to create GCP secret: {secret_name}"))?;
         }
 
         // Check if the value has changed
@@ -136,38 +144,35 @@ impl SecretManager {
             .send()
             .await
             .context(format!(
-                "Failed to add version to GCP secret: {}",
-                secret_name
+                "Failed to add version to GCP secret: {secret_name}"
             ))?;
 
         Ok(true)
     }
 
     /// Get the latest secret version value
-    #[allow(dead_code, clippy::missing_errors_doc, clippy::unused_async)] // May be used in future implementations
+    #[allow(dead_code, clippy::missing_errors_doc, clippy::unused_async, reason = "May be used in future implementations")]
     async fn get_latest_secret_value(&self, _secret_name: &str) -> Result<String> {
         Err(anyhow::anyhow!(
             "Not implemented - waiting for correct SDK API"
         ))
     }
 
-    #[allow(dead_code, clippy::missing_errors_doc, clippy::unused_async)] // May be used in future implementations
+    #[allow(dead_code, clippy::missing_errors_doc, clippy::unused_async, reason = "May be used in future implementations")]
     async fn get_secret(&self, _secret_name: &str) -> Result<()> {
         Err(anyhow::anyhow!(
             "Not implemented - waiting for correct SDK API"
         ))
     }
 
-    #[allow(dead_code)] // May be used in future implementations
-    #[allow(clippy::unused_async)] // Trait requires async signature
+    #[allow(dead_code, clippy::unused_async, reason = "May be used in future implementations, trait requires async signature")]
     async fn create_secret(&self, _project_id: &str, _secret_name: &str) -> Result<()> {
         Err(anyhow::anyhow!(
             "Not implemented - waiting for correct SDK API"
         ))
     }
 
-    #[allow(dead_code)] // May be used in future implementations
-    #[allow(clippy::unused_async)] // Trait requires async signature
+    #[allow(dead_code, clippy::unused_async, reason = "May be used in future implementations, trait requires async signature")]
     async fn add_secret_version(&self, _secret_name: &str, _secret_value: &str) -> Result<()> {
         Err(anyhow::anyhow!(
             "Not implemented - waiting for correct SDK API"

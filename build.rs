@@ -24,9 +24,9 @@ fn main() {
     let git_hash = std::env::var("BUILD_GIT_HASH")
         .unwrap_or_else(|_| get_git_hash().unwrap_or_else(|| "unknown".to_string()));
 
-    println!("cargo:rustc-env=BUILD_TIMESTAMP={}", timestamp);
-    println!("cargo:rustc-env=BUILD_DATETIME={}", datetime);
-    println!("cargo:rustc-env=BUILD_GIT_HASH={}", git_hash);
+    println!("cargo:rustc-env=BUILD_TIMESTAMP={timestamp}");
+    println!("cargo:rustc-env=BUILD_DATETIME={datetime}");
+    println!("cargo:rustc-env=BUILD_GIT_HASH={git_hash}");
 
     // Force rebuild by always rerunning (timestamp changes every build)
     // This ensures the binary hash changes even if source code is identical
@@ -53,9 +53,8 @@ fn get_git_hash() -> Option<String> {
     // Check if working directory is dirty
     let diff_output = Command::new("git").args(["diff", "--quiet"]).output().ok();
     let is_dirty = diff_output
-        .map(|output| !output.status.success())
-        .unwrap_or(false);
+        .is_some_and(|output| !output.status.success());
 
     let suffix = if is_dirty { "-dirty" } else { "" };
-    Some(format!("{}{}", short_hash, suffix))
+    Some(format!("{short_hash}{suffix}"))
 }

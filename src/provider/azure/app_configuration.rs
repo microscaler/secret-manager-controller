@@ -30,12 +30,21 @@ pub struct AzureAppConfiguration {
     key_prefix: String,
 }
 
+impl std::fmt::Debug for AzureAppConfiguration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureAppConfiguration")
+            .field("endpoint", &self.endpoint)
+            .field("key_prefix", &self.key_prefix)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AzureAppConfiguration {
     /// Create a new Azure App Configuration client
     /// Supports Workload Identity authentication
     /// # Errors
     /// Returns an error if Azure client initialization fails
-    #[allow(clippy::missing_errors_doc)]
+    #[allow(clippy::missing_errors_doc, clippy::unused_async, reason = "Error documentation is provided in doc comments, async signature may be needed for future credential initialization")]
     pub async fn new(
         config: &AzureConfig,
         app_config_endpoint: Option<&str>,
@@ -52,7 +61,7 @@ impl AzureAppConfiguration {
             // Extract store name from vault name pattern
             // This is a simple heuristic - users should provide endpoint explicitly
             let store_name = config.vault_name.replace("-vault", "-appconfig");
-            format!("https://{}.azconfig.io", store_name)
+            format!("https://{store_name}.azconfig.io")
         };
 
         // Ensure endpoint doesn't have trailing slash
@@ -93,7 +102,7 @@ impl AzureAppConfiguration {
 
         // Construct key prefix: {prefix}:{environment}:
         // Azure App Configuration uses colon-separated keys
-        let key_prefix = format!("{}:{}:", secret_prefix, environment);
+        let key_prefix = format!("{secret_prefix}:{environment}:");
 
         Ok(Self {
             client,
@@ -149,7 +158,7 @@ impl ConfigStoreProvider for AzureAppConfiguration {
         let get_response = self
             .client
             .get(&get_url)
-            .header("Authorization", format!("Bearer {}", token))
+            .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json")
             .send()
             .await
@@ -171,7 +180,7 @@ impl ConfigStoreProvider for AzureAppConfiguration {
             let response = self
                 .client
                 .put(&put_url)
-                .header("Authorization", format!("Bearer {}", token))
+                .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .json(&kv)
                 .send()
@@ -182,9 +191,7 @@ impl ConfigStoreProvider for AzureAppConfiguration {
                 let status = response.status();
                 let error_text = response.text().await.unwrap_or_default();
                 return Err(anyhow::anyhow!(
-                    "Failed to create Azure App Configuration key-value: {} - {}",
-                    status,
-                    error_text
+                    "Failed to create Azure App Configuration key-value: {status} - {error_text}"
                 ));
             }
 
@@ -227,7 +234,7 @@ impl ConfigStoreProvider for AzureAppConfiguration {
         let response = self
             .client
             .put(&put_url)
-            .header("Authorization", format!("Bearer {}", token))
+            .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json")
             .json(&kv)
             .send()
@@ -238,9 +245,7 @@ impl ConfigStoreProvider for AzureAppConfiguration {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             return Err(anyhow::anyhow!(
-                "Failed to update Azure App Configuration key-value: {} - {}",
-                status,
-                error_text
+                "Failed to update Azure App Configuration key-value: {status} - {error_text}"
             ));
         }
 
@@ -260,7 +265,7 @@ impl ConfigStoreProvider for AzureAppConfiguration {
         let response = self
             .client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", token))
+            .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json")
             .send()
             .await
@@ -278,9 +283,7 @@ impl ConfigStoreProvider for AzureAppConfiguration {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             Err(anyhow::anyhow!(
-                "Failed to get Azure App Configuration key-value: {} - {}",
-                status,
-                error_text
+                "Failed to get Azure App Configuration key-value: {status} - {error_text}"
             ))
         }
     }
@@ -294,7 +297,7 @@ impl ConfigStoreProvider for AzureAppConfiguration {
         let response = self
             .client
             .delete(&url)
-            .header("Authorization", format!("Bearer {}", token))
+            .header("Authorization", format!("Bearer {token}"))
             .send()
             .await
             .context("Failed to delete Azure App Configuration key-value")?;
@@ -303,9 +306,7 @@ impl ConfigStoreProvider for AzureAppConfiguration {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             return Err(anyhow::anyhow!(
-                "Failed to delete Azure App Configuration key-value: {} - {}",
-                status,
-                error_text
+                "Failed to delete Azure App Configuration key-value: {status} - {error_text}"
             ));
         }
 

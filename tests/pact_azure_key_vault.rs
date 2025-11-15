@@ -4,7 +4,6 @@
 //! They use Pact to create a mock server that simulates Azure Key Vault responses.
 
 use pact_consumer::prelude::*;
-use reqwest;
 use serde_json::json;
 
 // Helper function to make HTTP requests to the mock server
@@ -21,7 +20,7 @@ async fn make_request(
         "PUT" => client.put(url),
         "PATCH" => client.patch(url),
         "DELETE" => client.delete(url),
-        _ => panic!("Unsupported HTTP method: {}", method),
+        _ => panic!("Unsupported HTTP method: {method}"),
     };
 
     request = request
@@ -79,7 +78,7 @@ async fn test_azure_set_secret_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!("{}/secrets/test-secret-name", base_url);
+    let mock_url = format!("{base_url}/secrets/test-secret-name");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -134,7 +133,7 @@ async fn test_azure_get_secret_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!("{}/secrets/test-secret-name", base_url);
+    let mock_url = format!("{base_url}/secrets/test-secret-name");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -187,7 +186,7 @@ async fn test_azure_get_secret_version_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!("{}/secrets/test-secret-name/abc123", base_url);
+    let mock_url = format!("{base_url}/secrets/test-secret-name/abc123");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -236,7 +235,7 @@ async fn test_azure_delete_secret_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!("{}/secrets/test-secret-name", base_url);
+    let mock_url = format!("{base_url}/secrets/test-secret-name");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -289,7 +288,7 @@ async fn test_azure_secret_not_found_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!("{}/secrets/non-existent-secret", base_url);
+    let mock_url = format!("{base_url}/secrets/non-existent-secret");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -351,7 +350,7 @@ async fn test_azure_list_secrets_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/secrets", base_url);
+    let mock_url = format!("{base_url}/secrets");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -412,7 +411,7 @@ async fn test_azure_list_secret_versions_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/secrets/test-secret-name/versions", base_url);
+    let mock_url = format!("{base_url}/secrets/test-secret-name/versions");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -466,7 +465,7 @@ async fn test_azure_update_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/secrets/test-secret-name", base_url);
+    let mock_url = format!("{base_url}/secrets/test-secret-name");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -513,7 +512,7 @@ async fn test_azure_backup_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/secrets/test-secret-name/backup", base_url);
+    let mock_url = format!("{base_url}/secrets/test-secret-name/backup");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -565,7 +564,7 @@ async fn test_azure_restore_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/secrets/restore", base_url);
+    let mock_url = format!("{base_url}/secrets/restore");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -610,7 +609,7 @@ async fn test_azure_purge_deleted_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/deletedsecrets/test-secret-name", base_url);
+    let mock_url = format!("{base_url}/deletedsecrets/test-secret-name");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -654,7 +653,7 @@ async fn test_azure_get_deleted_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/deletedsecrets/test-secret-name", base_url);
+    let mock_url = format!("{base_url}/deletedsecrets/test-secret-name");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -712,7 +711,7 @@ async fn test_azure_list_deleted_secrets_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/deletedsecrets", base_url);
+    let mock_url = format!("{base_url}/deletedsecrets");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -761,7 +760,7 @@ async fn test_azure_recover_deleted_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/deletedsecrets/test-secret-name/recover", base_url);
+    let mock_url = format!("{base_url}/deletedsecrets/test-secret-name/recover");
 
     let client = reqwest::Client::new();
     let response = make_request(

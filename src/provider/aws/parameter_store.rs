@@ -26,10 +26,19 @@ pub struct AwsParameterStore {
     _region: String,
 }
 
+impl std::fmt::Debug for AwsParameterStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsParameterStore")
+            .field("parameter_path_prefix", &self.parameter_path_prefix)
+            .field("_region", &self._region)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AwsParameterStore {
     /// Create a new AWS Parameter Store client
     /// Supports IRSA (IAM Roles for Service Accounts) authentication
-    #[allow(clippy::missing_errors_doc)]
+    #[allow(clippy::missing_errors_doc, reason = "Error documentation is provided in doc comments")]
     pub async fn new(
         config: &AwsConfig,
         parameter_path: Option<&str>,
@@ -116,7 +125,7 @@ impl AwsParameterStore {
     /// Invalid characters are replaced with underscores
     fn construct_parameter_name(&self, key: &str) -> String {
         // Sanitize key (replace dots, slashes, etc. with underscores)
-        let sanitized_key = key.replace('.', "_").replace('/', "_");
+        let sanitized_key = key.replace(['.', '/'], "_");
 
         // Construct full path
         format!("{}/{}", self.parameter_path_prefix, sanitized_key)

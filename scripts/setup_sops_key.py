@@ -54,7 +54,7 @@ def main():
             print(result.stdout)
             print()
             print("💡 Tip: Use --key-email with one of the emails above, or use key ID")
-            print("   Example: python3 scripts/setup-sops-key.sh --key-email <email>")
+            print("   Example: python3 scripts/setup_sops_key.py --key-email <email>")
             sys.exit(1)
         print(f"✅ Found GPG key for: {args.key_email}")
     except subprocess.CalledProcessError as e:

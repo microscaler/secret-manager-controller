@@ -34,7 +34,6 @@ use crate::{
 use anyhow::{Context, Result};
 use kube::Client;
 use kube_runtime::controller::Action;
-use md5;
 use regex::Regex;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -51,7 +50,7 @@ use tracing::{error, info, warn};
 ///
 /// Invalid characters (`.`, `/`, etc.) are replaced with `_` to match GCP Secret Manager requirements
 #[must_use]
-#[allow(clippy::doc_markdown)]
+#[allow(clippy::doc_markdown, reason = "Markdown formatting in doc comments is intentional")]
 #[cfg(test)]
 pub fn construct_secret_name(prefix: Option<&str>, key: &str, suffix: Option<&str>) -> String {
     construct_secret_name_impl(prefix, key, suffix)
@@ -150,8 +149,16 @@ pub struct Reconciler {
     sops_private_key: Option<String>,
 }
 
+impl std::fmt::Debug for Reconciler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reconciler")
+            .field("sops_private_key", &self.sops_private_key.as_ref().map(|_| "***"))
+            .finish_non_exhaustive()
+    }
+}
+
 impl Reconciler {
-    #[allow(clippy::missing_errors_doc)]
+    #[allow(clippy::missing_errors_doc, reason = "Error documentation is provided in doc comments")]
     pub async fn new(client: Client) -> Result<Self> {
         // Provider is created per-reconciliation based on provider config
         // Per-resource auth config is handled in reconcile()
@@ -217,7 +224,7 @@ impl Reconciler {
         Ok(None)
     }
 
-    #[allow(clippy::too_many_lines, clippy::missing_errors_doc)]
+    #[allow(clippy::too_many_lines, clippy::missing_errors_doc, reason = "Reconciliation logic is complex and error docs are in comments")]
     pub async fn reconcile(
         config: std::sync::Arc<SecretManagerConfig>,
         ctx: std::sync::Arc<Reconciler>,
@@ -233,7 +240,7 @@ impl Reconciler {
         }
     }
 
-    #[allow(clippy::too_many_lines, clippy::missing_errors_doc)]
+    #[allow(clippy::too_many_lines, clippy::missing_errors_doc, reason = "Reconciliation logic is complex and error docs are in comments")]
     async fn reconcile_internal(
         config: std::sync::Arc<SecretManagerConfig>,
         ctx: std::sync::Arc<Reconciler>,
@@ -249,7 +256,7 @@ impl Reconciler {
                 .update_status_phase(
                     &config,
                     "Failed",
-                    Some(&format!("Validation failed: {}", e)),
+                    Some(&format!("Validation failed: {e}")),
                 )
                 .await;
             return Err(ReconcilerError::ReconciliationFailed(e));
@@ -272,7 +279,7 @@ impl Reconciler {
                 .update_status_phase(
                     &config,
                     "Failed",
-                    Some(&format!("Invalid gitRepositoryPullInterval: {}", e)),
+                    Some(&format!("Invalid gitRepositoryPullInterval: {e}")),
                 )
                 .await;
             return Err(ReconcilerError::ReconciliationFailed(err));
@@ -295,7 +302,7 @@ impl Reconciler {
                 .update_status_phase(
                     &config,
                     "Failed",
-                    Some(&format!("Invalid reconcileInterval: {}", e)),
+                    Some(&format!("Invalid reconcileInterval: {e}")),
                 )
                 .await;
             return Err(ReconcilerError::ReconciliationFailed(err));
@@ -399,10 +406,8 @@ impl Reconciler {
                         // Check if this is a 404 (resource not found) - this is expected and we should wait
                         // The error is wrapped in anyhow::Error, so we need to check the root cause
                         let is_404 = e.chain().any(|err| {
-                            if let Some(kube_err) = err.downcast_ref::<kube::Error>() {
-                                if let kube::Error::Api(api_err) = kube_err {
-                                    return api_err.code == 404;
-                                }
+                            if let Some(kube::Error::Api(api_err)) = err.downcast_ref::<kube::Error>() {
+                                return api_err.code == 404;
                             }
                             false
                         });
@@ -435,7 +440,7 @@ impl Reconciler {
                             .update_status_phase(
                                 &config,
                                 "Failed",
-                                Some(&format!("Clone failed, repo unavailable: {}", e)),
+                                Some(&format!("Clone failed, repo unavailable: {e}")),
                             )
                             .await;
                         return Err(ReconcilerError::ReconciliationFailed(e));
@@ -459,7 +464,7 @@ impl Reconciler {
                             .update_status_phase(
                                 &config,
                                 "Failed",
-                                Some(&format!("Failed to get artifact path: {}", e)),
+                                Some(&format!("Failed to get artifact path: {e}")),
                             )
                             .await;
                         return Err(ReconcilerError::ReconciliationFailed(e));
@@ -644,7 +649,7 @@ impl Reconciler {
                                 .update_status_phase(
                                     &config,
                                     "Failed",
-                                    Some(&format!("Failed to process kustomize secrets: {}", e)),
+                                    Some(&format!("Failed to process kustomize secrets: {e}")),
                                 )
                                 .await;
                             return Err(ReconcilerError::ReconciliationFailed(e));
@@ -659,7 +664,7 @@ impl Reconciler {
                         .update_status_phase(
                             &config,
                             "Failed",
-                            Some(&format!("Failed to extract secrets from kustomize: {}", e)),
+                            Some(&format!("Failed to extract secrets from kustomize: {e}")),
                         )
                         .await;
                     return Err(ReconcilerError::ReconciliationFailed(e));
@@ -692,7 +697,7 @@ impl Reconciler {
                         .update_status_phase(
                             &config,
                             "Failed",
-                            Some(&format!("Failed to find application files: {}", e)),
+                            Some(&format!("Failed to find application files: {e}")),
                         )
                         .await;
                     return Err(ReconcilerError::ReconciliationFailed(e));
@@ -737,7 +742,7 @@ impl Reconciler {
     }
 
     /// Get FluxCD GitRepository resource
-    #[allow(clippy::doc_markdown, clippy::missing_errors_doc)]
+    #[allow(clippy::doc_markdown, clippy::missing_errors_doc, reason = "Markdown formatting is intentional and error docs are in comments")]
     async fn get_flux_git_repository(&self, source_ref: &SourceRef) -> Result<serde_json::Value> {
         // Use Kubernetes API to get GitRepository
         // GitRepository is a CRD from source.toolkit.fluxcd.io/v1beta2
@@ -764,9 +769,9 @@ impl Reconciler {
     /// Get artifact path from FluxCD GitRepository status
     #[allow(
         clippy::doc_markdown,
-        clippy::unused_async,
         clippy::missing_errors_doc,
-        clippy::unused_self
+        clippy::unused_self,
+        reason = "Markdown formatting is intentional, error docs in comments, self needed for trait"
     )]
     fn get_flux_artifact_path(&self, git_repo: &serde_json::Value) -> Result<PathBuf> {
         // Extract artifact path from GitRepository status
@@ -810,7 +815,8 @@ impl Reconciler {
         clippy::doc_markdown,
         clippy::missing_errors_doc,
         clippy::unused_async,
-        clippy::too_many_lines
+        clippy::too_many_lines,
+        reason = "Markdown formatting is intentional, error docs in comments, async signature matches trait, complex logic"
     )]
     async fn get_argocd_artifact_path(&self, source_ref: &SourceRef) -> Result<PathBuf> {
         use kube::api::ApiResource;
@@ -927,13 +933,12 @@ impl Reconciler {
 
         // Create parent directory
         let parent_dir = path_buf.parent().ok_or_else(|| {
-            anyhow::anyhow!("Cannot determine parent directory for path: {}", clone_path)
+            anyhow::anyhow!("Cannot determine parent directory for path: {clone_path}")
         })?;
         tokio::fs::create_dir_all(parent_dir)
             .await
             .context(format!(
-                "Failed to create parent directory for {}",
-                clone_path
+                "Failed to create parent directory for {clone_path}"
             ))?;
 
         // Clone repository (shallow clone for efficiency)
@@ -1009,7 +1014,7 @@ impl Reconciler {
         Ok(path_buf)
     }
 
-    #[allow(clippy::too_many_lines, clippy::unused_async)]
+    #[allow(clippy::too_many_lines, clippy::unused_async, reason = "Complex file processing logic, async signature matches trait")]
     async fn process_application_files(
         &self,
         provider: &dyn SecretManagerProvider,
@@ -1346,9 +1351,9 @@ impl Reconciler {
             .map(|c| c.enabled)
             .unwrap_or(false);
         let description = if is_configs_enabled {
-            format!("Synced {} properties to config store", secrets_synced)
+            format!("Synced {secrets_synced} properties to config store")
         } else {
-            format!("Synced {} secrets to secret store", secrets_synced)
+            format!("Synced {secrets_synced} secrets to secret store")
         };
 
         let status = SecretManagerConfigStatus {
@@ -1397,13 +1402,12 @@ impl Reconciler {
         field_name: &str,
         min_seconds: u64,
     ) -> Result<()> {
-        use regex::Regex;
 
         // Trim whitespace
         let interval_trimmed = interval.trim();
 
         if interval_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         // Regex pattern for Kubernetes duration format
@@ -1413,15 +1417,14 @@ impl Reconciler {
         // Examples: "1m", "5m", "1h", "30m", "2h", "1d"
         // Does NOT match: "30s" (if min_seconds >= 60), "abc", "1", "m", etc.
         let duration_regex = Regex::new(r"^(?P<number>\d+)(?P<unit>[smhd])$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         // Match against trimmed, lowercase version
         let interval_lower = interval_trimmed.to_lowercase();
 
         let captures = duration_regex.captures(&interval_lower)
             .ok_or_else(|| anyhow::anyhow!(
-                "Invalid duration format '{}': must match pattern <number><unit> where unit is s, m, h, or d (e.g., '1m', '5m', '1h')",
-                interval_trimmed
+                "Invalid duration format '{interval_trimmed}': must match pattern <number><unit> where unit is s, m, h, or d (e.g., '1m', '5m', '1h')"
             ))?;
 
         // Extract number and unit from regex captures
@@ -1429,8 +1432,7 @@ impl Reconciler {
             .name("number")
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Failed to extract number from duration '{}'",
-                    interval_trimmed
+                    "Failed to extract number from duration '{interval_trimmed}'"
                 )
             })?
             .as_str();
@@ -1439,8 +1441,7 @@ impl Reconciler {
             .name("unit")
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Failed to extract unit from duration '{}'",
-                    interval_trimmed
+                    "Failed to extract unit from duration '{interval_trimmed}'"
                 )
             })?
             .as_str();
@@ -1448,17 +1449,13 @@ impl Reconciler {
         // Parse number safely
         let number: u64 = number_str.parse().map_err(|e| {
             anyhow::anyhow!(
-                "Invalid duration number '{}' in '{}': {}",
-                number_str,
-                interval_trimmed,
-                e
+                "Invalid duration number '{number_str}' in '{interval_trimmed}': {e}"
             )
         })?;
 
         if number == 0 {
             return Err(anyhow::anyhow!(
-                "Duration number must be greater than 0, got '{}'",
-                interval_trimmed
+                "Duration number must be greater than 0, got '{interval_trimmed}'"
             ));
         }
 
@@ -1471,9 +1468,7 @@ impl Reconciler {
             _ => {
                 // This should never happen due to regex, but handle it safely
                 return Err(anyhow::anyhow!(
-                    "Invalid duration unit '{}' in '{}': expected s, m, h, or d",
-                    unit,
-                    interval_trimmed
+                    "Invalid duration unit '{unit}' in '{interval_trimmed}': expected s, m, h, or d"
                 ));
             }
         };
@@ -1483,14 +1478,10 @@ impl Reconciler {
             let min_duration = if min_seconds == 60 {
                 "1 minute (60 seconds)"
             } else {
-                &format!("{} seconds", min_seconds)
+                &format!("{min_seconds} seconds")
             };
             return Err(anyhow::anyhow!(
-                "{} must be at least {} to avoid API rate limits. Got: '{}' ({} seconds)",
-                field_name,
-                min_duration,
-                interval_trimmed,
-                seconds
+                "{field_name} must be at least {min_duration} to avoid API rate limits. Got: '{interval_trimmed}' ({seconds} seconds)"
             ));
         }
 
@@ -1562,9 +1553,7 @@ impl Reconciler {
             if !prefix.is_empty() {
                 if let Err(e) = Self::validate_secret_name_component(prefix, "secrets.prefix") {
                     return Err(anyhow::anyhow!(
-                        "Invalid secrets.prefix '{}': {}",
-                        prefix,
-                        e
+                        "Invalid secrets.prefix '{prefix}': {e}"
                     ));
                 }
             }
@@ -1574,9 +1563,7 @@ impl Reconciler {
             if !suffix.is_empty() {
                 if let Err(e) = Self::validate_secret_name_component(suffix, "secrets.suffix") {
                     return Err(anyhow::anyhow!(
-                        "Invalid secrets.suffix '{}': {}",
-                        suffix,
-                        e
+                        "Invalid secrets.suffix '{suffix}': {e}"
                     ));
                 }
             }
@@ -1586,9 +1573,7 @@ impl Reconciler {
             if !base_path.is_empty() {
                 if let Err(e) = Self::validate_path(base_path, "secrets.basePath") {
                     return Err(anyhow::anyhow!(
-                        "Invalid secrets.basePath '{}': {}",
-                        base_path,
-                        e
+                        "Invalid secrets.basePath '{base_path}': {e}"
                     ));
                 }
             }
@@ -1598,9 +1583,7 @@ impl Reconciler {
             if !kustomize_path.is_empty() {
                 if let Err(e) = Self::validate_path(kustomize_path, "secrets.kustomizePath") {
                     return Err(anyhow::anyhow!(
-                        "Invalid secrets.kustomizePath '{}': {}",
-                        kustomize_path,
-                        e
+                        "Invalid secrets.kustomizePath '{kustomize_path}': {e}"
                     ));
                 }
             }
@@ -1608,13 +1591,13 @@ impl Reconciler {
 
         // Validate provider configuration
         if let Err(e) = Self::validate_provider_config(&config.spec.provider) {
-            return Err(anyhow::anyhow!("Invalid provider configuration: {}", e));
+            return Err(anyhow::anyhow!("Invalid provider configuration: {e}"));
         }
 
         // Validate configs configuration if present
         if let Some(ref configs) = config.spec.configs {
             if let Err(e) = Self::validate_configs_config(configs) {
-                return Err(anyhow::anyhow!("Invalid configs configuration: {}", e));
+                return Err(anyhow::anyhow!("Invalid configs configuration: {e}"));
             }
         }
 
@@ -1631,8 +1614,7 @@ impl Reconciler {
         match kind_trimmed {
             "GitRepository" | "Application" => Ok(()),
             _ => Err(anyhow::anyhow!(
-                "Must be 'GitRepository' or 'Application' (case-sensitive), got '{}'",
-                kind_trimmed
+                "Must be 'GitRepository' or 'Application' (case-sensitive), got '{kind_trimmed}'"
             )),
         }
     }
@@ -1645,7 +1627,7 @@ impl Reconciler {
         let name_trimmed = name.trim();
 
         if name_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         if name_trimmed.len() > 253 {
@@ -1661,13 +1643,11 @@ impl Reconciler {
         // Simplified: lowercase alphanumeric, hyphens, dots; cannot start/end with hyphen or dot
         let name_regex =
             Regex::new(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
-                .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if !name_regex.is_match(name_trimmed) {
             return Err(anyhow::anyhow!(
-                "{} '{}' must be a valid Kubernetes name (lowercase alphanumeric, hyphens, dots; cannot start/end with hyphen or dot)",
-                field_name,
-                name_trimmed
+                "{field_name} '{name_trimmed}' must be a valid Kubernetes name (lowercase alphanumeric, hyphens, dots; cannot start/end with hyphen or dot)"
             ));
         }
 
@@ -1695,12 +1675,11 @@ impl Reconciler {
 
         // RFC 1123 label: [a-z0-9]([-a-z0-9]*[a-z0-9])?
         let namespace_regex = Regex::new(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if !namespace_regex.is_match(namespace_trimmed) {
             return Err(anyhow::anyhow!(
-                "sourceRef.namespace '{}' must be a valid Kubernetes namespace (lowercase alphanumeric, hyphens; cannot start/end with hyphen)",
-                namespace_trimmed
+                "sourceRef.namespace '{namespace_trimmed}' must be a valid Kubernetes namespace (lowercase alphanumeric, hyphens; cannot start/end with hyphen)"
             ));
         }
 
@@ -1715,7 +1694,7 @@ impl Reconciler {
         let label_trimmed = label.trim();
 
         if label_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         if label_trimmed.len() > 63 {
@@ -1729,13 +1708,11 @@ impl Reconciler {
 
         // Kubernetes label: [a-z0-9]([-a-z0-9_.]*[a-z0-9])?
         let label_regex = Regex::new(r"^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if !label_regex.is_match(label_trimmed) {
             return Err(anyhow::anyhow!(
-                "{} '{}' must be a valid Kubernetes label (lowercase alphanumeric, hyphens, dots, underscores; cannot start/end with dot)",
-                field_name,
-                label_trimmed
+                "{field_name} '{label_trimmed}' must be a valid Kubernetes label (lowercase alphanumeric, hyphens, dots, underscores; cannot start/end with dot)"
             ));
         }
 
@@ -1750,7 +1727,7 @@ impl Reconciler {
         let component_trimmed = component.trim();
 
         if component_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         if component_trimmed.len() > 255 {
@@ -1764,13 +1741,11 @@ impl Reconciler {
 
         // Secret name component: alphanumeric, hyphens, underscores
         let secret_regex = Regex::new(r"^[a-zA-Z0-9_-]+$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if !secret_regex.is_match(component_trimmed) {
             return Err(anyhow::anyhow!(
-                "{} '{}' must contain only alphanumeric characters, hyphens, and underscores",
-                field_name,
-                component_trimmed
+                "{field_name} '{component_trimmed}' must contain only alphanumeric characters, hyphens, and underscores"
             ));
         }
 
@@ -1784,15 +1759,13 @@ impl Reconciler {
         let path_trimmed = path.trim();
 
         if path_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         // Check for null bytes
         if path_trimmed.contains('\0') {
             return Err(anyhow::anyhow!(
-                "{} '{}' cannot contain null bytes",
-                field_name,
-                path_trimmed
+                "{field_name} '{path_trimmed}' cannot contain null bytes"
             ));
         }
 
@@ -1814,9 +1787,7 @@ impl Reconciler {
         for ch in path_trimmed.chars() {
             if ch.is_control() {
                 return Err(anyhow::anyhow!(
-                    "{} '{}' contains control characters",
-                    field_name,
-                    path_trimmed
+                    "{field_name} '{path_trimmed}' contains control characters"
                 ));
             }
         }
@@ -1844,7 +1815,7 @@ impl Reconciler {
                 // - Allowed: lowercase letters, numbers, hyphens
                 // Reference: https://cloud.google.com/resource-manager/docs/creating-managing-projects
                 let project_id_regex = Regex::new(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
-                    .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+                    .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
                 if !project_id_regex.is_match(&gcp.project_id) {
                     return Err(anyhow::anyhow!(
@@ -1880,7 +1851,7 @@ impl Reconciler {
                 // - Hyphens cannot be consecutive
                 // Reference: https://learn.microsoft.com/en-us/azure/key-vault/general/about-keys-secrets-certificates#vault-name
                 let vault_name_regex = Regex::new(r"^[a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9]$")
-                    .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+                    .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
                 if !vault_name_regex.is_match(&azure.vault_name) {
                     return Err(anyhow::anyhow!(
@@ -1920,23 +1891,23 @@ impl Reconciler {
 
         // Standard region pattern: [a-z]{2}-[a-z]+-[0-9]+
         let standard_pattern = Regex::new(r"^[a-z]{2}-[a-z]+-\d+$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         // Gov region pattern: [a-z]{2}-gov-[a-z]+-[0-9]+
         let gov_pattern = Regex::new(r"^[a-z]{2}-gov-[a-z]+-\d+$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         // ISO region pattern: [a-z]{2}-iso-[a-z]+-[0-9]+
         let iso_pattern = Regex::new(r"^[a-z]{2}-iso-[a-z]+-\d+$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         // China region pattern: cn-[a-z]+-[0-9]+
         let china_pattern = Regex::new(r"^cn-[a-z]+-\d+$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         // Local pattern (for localstack/testing)
         let local_pattern = Regex::new(r"^local$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if standard_pattern.is_match(&region_trimmed)
             || gov_pattern.is_match(&region_trimmed)
@@ -1947,8 +1918,7 @@ impl Reconciler {
             Ok(())
         } else {
             Err(anyhow::anyhow!(
-                "provider.aws.region '{}' must be a valid AWS region code (e.g., 'us-east-1', 'eu-west-1', 'us-gov-west-1', 'cn-north-1'). See: https://docs.aws.amazon.com/general/latest/gr/rande.html",
-                region
+                "provider.aws.region '{region}' must be a valid AWS region code (e.g., 'us-east-1', 'eu-west-1', 'us-gov-west-1', 'cn-north-1'). See: https://docs.aws.amazon.com/general/latest/gr/rande.html"
             ))
         }
     }
@@ -1968,9 +1938,7 @@ impl Reconciler {
             if !endpoint.is_empty() {
                 if let Err(e) = Self::validate_url(endpoint, "configs.appConfigEndpoint") {
                     return Err(anyhow::anyhow!(
-                        "Invalid configs.appConfigEndpoint '{}': {}",
-                        endpoint,
-                        e
+                        "Invalid configs.appConfigEndpoint '{endpoint}': {e}"
                     ));
                 }
             }
@@ -1981,9 +1949,7 @@ impl Reconciler {
             if !path.is_empty() {
                 if let Err(e) = Self::validate_aws_parameter_path(path, "configs.parameterPath") {
                     return Err(anyhow::anyhow!(
-                        "Invalid configs.parameterPath '{}': {}",
-                        path,
-                        e
+                        "Invalid configs.parameterPath '{path}': {e}"
                     ));
                 }
             }
@@ -1997,18 +1963,16 @@ impl Reconciler {
         let url_trimmed = url.trim();
 
         if url_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         // Basic URL validation: must start with http:// or https://
         let url_regex = Regex::new(r"^https?://[^\s/$.?#].[^\s]*$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if !url_regex.is_match(url_trimmed) {
             return Err(anyhow::anyhow!(
-                "{} '{}' must be a valid URL starting with http:// or https://",
-                field_name,
-                url_trimmed
+                "{field_name} '{url_trimmed}' must be a valid URL starting with http:// or https://"
             ));
         }
 
@@ -2021,26 +1985,22 @@ impl Reconciler {
         let path_trimmed = path.trim();
 
         if path_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         if !path_trimmed.starts_with('/') {
             return Err(anyhow::anyhow!(
-                "{} '{}' must start with '/' (e.g., '/my-service/dev')",
-                field_name,
-                path_trimmed
+                "{field_name} '{path_trimmed}' must start with '/' (e.g., '/my-service/dev')"
             ));
         }
 
         // AWS Parameter Store path: /[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)*
         let param_path_regex = Regex::new(r"^/[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)*$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if !param_path_regex.is_match(path_trimmed) {
             return Err(anyhow::anyhow!(
-                "{} '{}' must be a valid AWS Parameter Store path (e.g., '/my-service/dev')",
-                field_name,
-                path_trimmed
+                "{field_name} '{path_trimmed}' must be a valid AWS Parameter Store path (e.g., '/my-service/dev')"
             ));
         }
 
