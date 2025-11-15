@@ -22,7 +22,8 @@
 
 use crate::provider::aws::AwsSecretManager;
 use crate::provider::aws::AwsParameterStore;
-// use crate::provider::azure::AzureKeyVault;  // Disabled for now
+use crate::provider::azure::AzureKeyVault;
+use crate::provider::azure::AzureAppConfiguration;
 use crate::provider::gcp::SecretManagerClient as GcpSecretManagerClient;
 use crate::provider::{ConfigStoreProvider, SecretManagerProvider};
 use crate::{
@@ -347,15 +348,11 @@ impl Reconciler {
                     .context("Failed to create AWS Secrets Manager client")?;
                 Box::new(aws_provider)
             }
-            ProviderConfig::Azure(_azure_config) => {
-                // Azure support disabled for now
-                return Err(ReconcilerError::ReconciliationFailed(anyhow::anyhow!(
-                    "Azure provider is currently disabled"
-                )));
-                // let azure_provider = AzureKeyVault::new(azure_config, &ctx.client)
-                //     .await
-                //     .context("Failed to create Azure Key Vault client")?;
-                // Box::new(azure_provider)
+            ProviderConfig::Azure(azure_config) => {
+                let azure_provider = AzureKeyVault::new(azure_config, &ctx.client)
+                    .await
+                    .context("Failed to create Azure Key Vault client")?;
+                Box::new(azure_provider)
             }
         };
 
@@ -847,11 +844,41 @@ impl Reconciler {
                             }
                         }
                     }
-                    ProviderConfig::Azure(_azure_config) => {
-                        // Azure App Configuration not yet implemented
-                        return Err(anyhow::anyhow!(
-                            "Azure App Configuration provider not yet implemented"
-                        ).into());
+                    ProviderConfig::Azure(azure_config) => {
+                        // For Azure, use App Configuration
+                        let app_config_endpoint = config
+                            .spec
+                            .configs
+                            .as_ref()
+                            .and_then(|c| c.app_config_endpoint.as_deref());
+                        let azure_app_config = AzureAppConfiguration::new(
+                            azure_config,
+                            app_config_endpoint,
+                            secret_prefix,
+                            &config.spec.secrets.environment,
+                            &ctx.client,
+                        )
+                        .await
+                        .context("Failed to create Azure App Configuration client")?;
+
+                        for (key, value) in properties {
+                            match azure_app_config.create_or_update_config(&key, &value).await {
+                                Ok(was_updated) => {
+                                    config_count += 1;
+                                    if was_updated {
+                                        config_updated_count += 1;
+                                        info!(
+                                            "Updated config {} from git (GitOps source of truth)",
+                                            key
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to store config {}: {}", key, e);
+                                    return Err(e.context(format!("Failed to store config: {key}")));
+                                }
+                            }
+                        }
                     }
                 }
 

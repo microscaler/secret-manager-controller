@@ -189,6 +189,12 @@ pub struct ConfigsConfig {
     #[serde(default)]
     #[schemars(schema_with = "config_store_type_schema")]
     pub store: Option<ConfigStoreType>,
+    /// Azure-specific: App Configuration endpoint
+    /// Only applies when provider.type == azure
+    /// Optional: defaults to auto-detection from vault region if not specified
+    /// Example: https://my-app-config.azconfig.io
+    #[serde(default)]
+    pub app_config_endpoint: Option<String>,
 }
 
 /// GCP config store type

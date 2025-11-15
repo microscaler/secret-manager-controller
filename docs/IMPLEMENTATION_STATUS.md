@@ -52,37 +52,44 @@ my-service-api-timeout-prod = 30s
 
 **Note**: This is an interim solution. Long-term goal is to contribute GCP Parameter Manager support to External Secrets Operator.
 
-### ⏳ Phase 3: Azure App Configuration - PENDING
+### ✅ Phase 3: Azure App Configuration - COMPLETE
 
-**Status**: Research needed  
-**Priority**: Medium
+**Implementation Date**: Current  
+**Status**: Fully implemented and tested
 
-**Required Tasks**:
-1. Research `azure-app-configuration` Rust SDK availability
-2. Enable Azure provider (currently disabled)
-3. Create `AzureAppConfiguration` provider implementing `ConfigStoreProvider`
-4. Update reconciler to route properties → App Configuration
-5. Add Pact tests for App Configuration API
+**Completed Tasks**:
+- ✅ Researched Azure App Configuration Rust SDK (no official SDK - using REST API)
+- ✅ Enabled Azure provider (`pub mod azure;` in `src/provider/mod.rs`)
+- ✅ Refactored Azure Key Vault into separate `key_vault.rs` module
+- ✅ Created `AzureAppConfiguration` provider (`src/provider/azure/app_configuration.rs`)
+- ✅ Updated CRD schema with `app_config_endpoint` field
+- ✅ Updated reconciler to route properties → App Configuration when `configs.enabled = true`
+- ✅ Added 6 Pact tests for App Configuration REST API
+- ✅ Simplified authentication to only support Workload Identity and Managed Identity
 
-**Storage Format** (planned):
+**Storage Format**:
 ```
 my-service:prod:database.host = db.example.com
 my-service:prod:database.port = 5432
 my-service:prod:api.timeout = 30s
 ```
 
-**Blockers**:
-- Need to verify Azure App Configuration Rust SDK availability
-- May need to fork Azure SDK for rustls support (similar to Key Vault)
+**Key Features**:
+- REST API implementation (no official Rust SDK available)
+- Workload Identity and Managed Identity authentication support
+- Key format: `{prefix}:{environment}:{key}` (colon-separated)
+- Full CRUD operations via REST API
+- Auto-detection of App Configuration endpoint from vault name
 
 ## Test Coverage
 
-### Pact Contract Tests: 45 tests total
+### Pact Contract Tests: 51 tests total ✅
 
 - **GCP Secret Manager**: 12 tests ✅
 - **AWS Secrets Manager**: 13 tests ✅
-- **AWS Parameter Store**: 6 tests ✅ (NEW)
+- **AWS Parameter Store**: 6 tests ✅
 - **Azure Key Vault**: 14 tests ✅
+- **Azure App Configuration**: 6 tests ✅ (NEW)
 
 All tests passing and publishing to Pact broker.
 
@@ -98,54 +105,83 @@ spec:
     enabled: true  # Enable config store routing (default: false)
     parameterPath: /my-service/dev  # AWS-specific (optional)
     store: SecretManager  # GCP-specific (optional, default: SecretManager)
+    appConfigEndpoint: https://my-app-config.azconfig.io  # Azure-specific (optional)
 ```
 
 ### Routing Logic
 
 When `configs.enabled = true`:
-- **AWS**: Routes `application.properties` → Parameter Store (individual parameters)
-- **GCP**: Routes `application.properties` → Secret Manager (individual secrets)
-- **Azure**: Returns error (not yet implemented)
+- **AWS**: Routes `application.properties` → Parameter Store (individual parameters) ✅
+- **GCP**: Routes `application.properties` → Secret Manager (individual secrets) ✅
+- **Azure**: Routes `application.properties` → App Configuration (individual key-values) ✅
 
 When `configs.enabled = false` (default):
-- Properties stored as JSON blob in secret store (backward compatibility)
+- Properties stored as JSON blob in secret store (backward compatibility) ✅
 
 ## Files Modified/Created
 
 ### New Files
 - `src/provider/aws/parameter_store.rs` - AWS Parameter Store provider
 - `tests/pact_aws_parameter_store.rs` - Pact tests for Parameter Store
+- `src/provider/azure/app_configuration.rs` - Azure App Configuration provider
+- `src/provider/azure/key_vault.rs` - Azure Key Vault provider (refactored)
+- `tests/pact_azure_app_configuration.rs` - Pact tests for App Configuration
+- `scripts/pact_publish.py` - Python script for Pact publishing (replaces shell script)
 
 ### Modified Files
-- `src/provider/mod.rs` - Added `ConfigStoreProvider` trait
-- `src/lib.rs` - Added `ConfigsConfig` with `parameter_path` field
-- `src/main.rs` - Added `ConfigsConfig` with `parameter_path` field
-- `src/controller/crdgen.rs` - Added `parameter_path` to CRD generation
-- `src/controller/reconciler.rs` - Added config store routing logic
-- `Cargo.toml` - Added `aws-sdk-ssm` dependency
-- `Tiltfile` - Added Parameter Store to Pact publishing
-- `config/crd/secretmanagerconfig.yaml` - Regenerated with `parameterPath` field
+- `src/provider/mod.rs` - Added `ConfigStoreProvider` trait, enabled Azure provider
+- `src/provider/azure/mod.rs` - Refactored to export both Key Vault and App Configuration
+- `src/lib.rs` - Added `ConfigsConfig` with all provider-specific fields
+- `src/main.rs` - Added `ConfigsConfig` with all provider-specific fields
+- `src/controller/crdgen.rs` - Added all config fields to CRD generation
+- `src/controller/reconciler.rs` - Added config store routing logic for all providers
+- `Cargo.toml` - Added `aws-sdk-ssm` dependency, enabled Azure dependencies
+- `Tiltfile` - Updated to use Python Pact publishing script
+- `config/crd/secretmanagerconfig.yaml` - Regenerated with all config fields
+- `.gitignore` - Added `build_artifacts/` directory
 
 ## Next Steps
 
-1. **Phase 3 Implementation** (Azure App Configuration):
-   - Research Azure App Configuration Rust SDK
-   - Implement provider similar to AWS Parameter Store
-   - Add Pact tests
+### ✅ All Phases Complete!
 
-2. **Future Enhancements**:
-   - GCP Parameter Manager support (after ESO contribution)
-   - Config validation before storing
-   - Config versioning and rollback support
+All three phases of config store routing are now fully implemented and tested.
 
-## Success Criteria
+### Future Enhancements (Optional):
 
-✅ All success criteria met for Phases 1 and 2:
+1. **GCP Parameter Manager Support** (after ESO contribution):
+   - Contribute GCP Parameter Manager provider to External Secrets Operator
+   - Update controller to use Parameter Manager instead of Secret Manager for configs
+
+2. **Azure App Configuration ESO Provider**:
+   - Contribute Azure App Configuration provider to External Secrets Operator
+   - Enables ConfigMap creation from App Configuration
+
+3. **Config Validation**:
+   - Validate config values before storing
+   - Add schema validation support
+
+4. **Config Versioning**:
+   - Track config changes over time
+   - Support config rollback functionality
+
+## Success Criteria ✅ ALL MET
+
+✅ All success criteria met for all three phases:
 1. ✅ `application.properties` routes to config stores (when enabled)
 2. ✅ Individual properties stored as separate entries (not JSON blob)
 3. ✅ Backward compatibility maintained (`configs.enabled: false` by default)
-4. ✅ Two providers supported (AWS, GCP)
+4. ✅ All three providers supported (AWS, GCP, Azure)
+   - ✅ AWS: Parameter Store (6 Pact tests)
+   - ✅ GCP: Secret Manager config routing (uses existing tests)
+   - ✅ Azure: App Configuration (6 Pact tests)
 5. ✅ Clear CRD configuration for routing decisions
-6. ✅ Tests passing (Pact tests)
+   - ✅ `configs.enabled` field
+   - ✅ `configs.parameter_path` (AWS)
+   - ✅ `configs.store` (GCP)
+   - ✅ `configs.app_config_endpoint` (Azure)
+6. ✅ Tests passing (51 Pact tests total)
+   - ✅ All Pact tests passing
+   - ✅ Unit tests for providers
+   - ✅ Integration tests for routing logic
 7. ✅ Documentation updated
 

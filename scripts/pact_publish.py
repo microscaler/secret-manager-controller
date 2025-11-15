@@ -160,8 +160,8 @@ def publish_pact_files(
     branch: str
 ) -> bool:
     """Publish Pact files to the broker."""
-    providers = ["gcp", "aws", "aws-parameter-store", "azure"]
-    provider_names = ["GCP-Secret-Manager", "AWS-Secrets-Manager", "AWS-Parameter-Store", "Azure-Key-Vault"]
+    providers = ["gcp", "aws", "aws-parameter-store", "azure", "azure-app-configuration"]
+    provider_names = ["GCP-Secret-Manager", "AWS-Secrets-Manager", "AWS-Parameter-Store", "Azure-Key-Vault", "Azure-App-Configuration"]
     
     timestamp = int(time.time())
     

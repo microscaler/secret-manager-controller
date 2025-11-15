@@ -41,4 +41,4 @@ pub trait ConfigStoreProvider: Send + Sync {
 // Provider implementations
 pub mod gcp;
 pub mod aws;
-// pub mod azure;  // Disabled for now
+pub mod azure;
