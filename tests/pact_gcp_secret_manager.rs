@@ -6,6 +6,28 @@
 use pact_consumer::prelude::*;
 use serde_json::json;
 
+// Helper function to make HTTP requests to the mock server
+async fn make_request(
+    client: &reqwest::Client,
+    method: &str,
+    url: &str,
+    body: Option<serde_json::Value>,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let mut request = match method {
+        "GET" => client.get(url),
+        "POST" => client.post(url),
+        _ => panic!("Unsupported HTTP method: {}", method),
+    };
+
+    request = request.header("authorization", "Bearer test-token");
+
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+
+    request.send().await
+}
+
 #[tokio::test]
 async fn test_gcp_create_secret_contract() {
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "GCP-Secret-Manager");
@@ -37,11 +59,33 @@ async fn test_gcp_create_secret_contract() {
     });
 
     let mock_server = pact_builder.start_mock_server(None, None);
-    let mock_url = format!("http://{}", mock_server.url());
+    // mock_server.url() returns a Url struct - convert to string and strip trailing slash
+    let mut base_url = mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+    // Path always starts with /
+    let mock_url = format!("{}/v1/projects/test-project/secrets", base_url);
 
-    // Note: In a real test, we would configure the GCP client to use this mock URL
-    // For now, this test verifies the contract structure
-    assert!(!mock_url.is_empty());
+    // Make the actual HTTP request to verify the contract
+    let client = reqwest::Client::new();
+    let response = make_request(
+        &client,
+        "POST",
+        &mock_url,
+        Some(json!({
+            "secretId": "test-secret-name",
+            "replication": {
+                "automatic": {}
+            }
+        })),
+    )
+    .await
+    .expect("Failed to make request");
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(body["name"], "projects/test-project/secrets/test-secret-name");
 }
 
 #[tokio::test]
@@ -57,7 +101,7 @@ async fn test_gcp_add_secret_version_contract() {
             .header("content-type", "application/json")
             .json_body(json!({
                 "payload": {
-                    "data": "dGVzdC1zZWNyZXQtdmFsdWU="  // base64 encoded "test-secret-value"
+                    "data": "dGVzdC1zZWNyZXQtdmFsdWU="
                 }
             }));
         i.response
@@ -75,9 +119,32 @@ async fn test_gcp_add_secret_version_contract() {
     });
 
     let mock_server = pact_builder.start_mock_server(None, None);
-    let mock_url = format!("http://{}", mock_server.url());
+    // mock_server.url() returns a Url struct - convert to string and strip trailing slash
+    let mut base_url = mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+    // Path always starts with /
+    let mock_url = format!("{}/v1/projects/test-project/secrets/test-secret-name:addVersion", base_url);
 
-    assert!(!mock_url.is_empty());
+    // Make the actual HTTP request to verify the contract
+    let client = reqwest::Client::new();
+    let response = make_request(
+        &client,
+        "POST",
+        &mock_url,
+        Some(json!({
+            "payload": {
+                "data": "dGVzdC1zZWNyZXQtdmFsdWU="
+            }
+        })),
+    )
+    .await
+    .expect("Failed to make request");
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(body["name"], "projects/test-project/secrets/test-secret-name/versions/1");
 }
 
 #[tokio::test]
@@ -105,9 +172,28 @@ async fn test_gcp_get_secret_version_contract() {
     });
 
     let mock_server = pact_builder.start_mock_server(None, None);
-    let mock_url = format!("http://{}", mock_server.url());
+    // mock_server.url() returns a Url struct - convert to string and strip trailing slash
+    let mut base_url = mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+    // Path always starts with /
+    let mock_url = format!("{}/v1/projects/test-project/secrets/test-secret-name/versions/latest", base_url);
 
-    assert!(!mock_url.is_empty());
+    // Make the actual HTTP request to verify the contract
+    let client = reqwest::Client::new();
+    let response = make_request(
+        &client,
+        "GET",
+        &mock_url,
+        None,
+    )
+    .await
+    .expect("Failed to make request");
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(body["name"], "projects/test-project/secrets/test-secret-name/versions/1");
 }
 
 #[tokio::test]
@@ -136,7 +222,26 @@ async fn test_gcp_secret_not_found_contract() {
     });
 
     let mock_server = pact_builder.start_mock_server(None, None);
-    let mock_url = format!("http://{}", mock_server.url());
+    // mock_server.url() returns a Url struct - convert to string and strip trailing slash
+    let mut base_url = mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+    // Path always starts with /
+    let mock_url = format!("{}/v1/projects/test-project/secrets/non-existent-secret/versions/latest", base_url);
 
-    assert!(!mock_url.is_empty());
+    // Make the actual HTTP request to verify the contract
+    let client = reqwest::Client::new();
+    let response = make_request(
+        &client,
+        "GET",
+        &mock_url,
+        None,
+    )
+    .await
+    .expect("Failed to make request");
+
+    assert_eq!(response.status(), 404);
+    let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(body["error"]["code"], 404);
 }

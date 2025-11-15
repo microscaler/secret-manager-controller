@@ -27,6 +27,8 @@ spec:
         - containerPort: 9292
           name: http
         env:
+        - name: PACT_BROKER_PORT
+          value: "9292"
         - name: PACT_BROKER_DATABASE_URL
           value: "sqlite:///pacts/pact_broker.sqlite"
         - name: PACT_BROKER_BASIC_AUTH_USERNAME

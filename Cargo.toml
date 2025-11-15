@@ -132,4 +132,7 @@ git2 = { version = "0.20", default-features = false, features = ["https", "ssh",
 [dev-dependencies]
 # Pact contract testing
 pact_consumer = "1.4"
+# HTTP client for Pact tests (to make requests to mock server)
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["full"] }
 
