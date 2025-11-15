@@ -124,18 +124,26 @@ md5 = "0.8.0"
 # Force all reqwest dependencies to use rustls instead of native-tls (OpenSSL)
 # By adding reqwest as a direct dependency with rustls features, Cargo's feature
 # unification will ensure all transitive dependencies use rustls instead of OpenSSL
-reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+# Note: We must ensure rustls-tls-webpki-roots is included to avoid system cert issues
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls", "rustls-tls-webpki-roots"] }
 
 
 [build-dependencies]
 # Build script dependencies
 chrono = "0.4"
-git2 = { version = "0.20", default-features = false, features = ["https", "ssh", "vendored-openssl"] }
+# Note: We use command-line git instead of git2 to avoid OpenSSL dependency issues
+# This works for both native and cross-compilation builds
+
+# For musl targets, use vendored OpenSSL to avoid system OpenSSL dependency
+# This allows cross-compilation without needing OpenSSL installed
+[target.'cfg(target_env = "musl")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 # Pact contract testing
 pact_consumer = "1.4"
 # HTTP client for Pact tests (to make requests to mock server)
-reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+# Force rustls to avoid OpenSSL dependency
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls", "rustls-tls-webpki-roots"] }
 tokio = { version = "1", features = ["full"] }
 

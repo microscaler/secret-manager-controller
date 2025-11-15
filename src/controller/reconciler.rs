@@ -221,8 +221,49 @@ impl Reconciler {
         config: std::sync::Arc<SecretManagerConfig>,
         ctx: std::sync::Arc<Reconciler>,
     ) -> Result<Action, ReconcilerError> {
+        // Wrap entire reconciliation in error handling to prevent panics
+        match Self::reconcile_internal(config, ctx).await {
+            Ok(action) => Ok(action),
+            Err(e) => {
+                error!("Reconciliation failed with error: {}", e);
+                observability::metrics::increment_reconciliation_errors();
+                Err(e)
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines, clippy::missing_errors_doc)]
+    async fn reconcile_internal(
+        config: std::sync::Arc<SecretManagerConfig>,
+        ctx: std::sync::Arc<Reconciler>,
+    ) -> Result<Action, ReconcilerError> {
         let start = Instant::now();
         let name = config.metadata.name.as_deref().unwrap_or("unknown");
+
+        // Validate required fields before proceeding
+        if config.spec.source_ref.kind.is_empty() {
+            let err = anyhow::anyhow!("sourceRef.kind is required but is empty");
+            error!("Validation error for {}: {}", name, err);
+            return Err(ReconcilerError::ReconciliationFailed(err));
+        }
+
+        if config.spec.source_ref.name.is_empty() {
+            let err = anyhow::anyhow!("sourceRef.name is required but is empty");
+            error!("Validation error for {}: {}", name, err);
+            return Err(ReconcilerError::ReconciliationFailed(err));
+        }
+
+        if config.spec.source_ref.namespace.is_empty() {
+            let err = anyhow::anyhow!("sourceRef.namespace is required but is empty");
+            error!("Validation error for {}: {}", name, err);
+            return Err(ReconcilerError::ReconciliationFailed(err));
+        }
+
+        if config.spec.secrets.environment.is_empty() {
+            let err = anyhow::anyhow!("secrets.environment is required but is empty");
+            error!("Validation error for {}: {}", name, err);
+            return Err(ReconcilerError::ReconciliationFailed(err));
+        }
 
         // Check if this is a manual reconciliation trigger (via annotation)
         let is_manual_trigger = config
@@ -243,19 +284,90 @@ impl Reconciler {
 
         observability::metrics::increment_reconciliations();
 
+        // Validate and log SecretManagerConfig resource first
+        info!(
+            "📋 SecretManagerConfig resource details: name={}, namespace={}, sourceRef.kind={}, sourceRef.name={}, sourceRef.namespace={}",
+            name,
+            config.metadata.namespace.as_deref().unwrap_or("default"),
+            config.spec.source_ref.kind,
+            config.spec.source_ref.name,
+            config.spec.source_ref.namespace
+        );
+        
+        info!(
+            "📋 Secrets config: environment={}, prefix={}, basePath={:?}",
+            config.spec.secrets.environment,
+            config.spec.secrets.prefix.as_deref().unwrap_or("none"),
+            config.spec.secrets.base_path
+        );
+        
+        info!(
+            "📋 Provider config: type={:?}",
+            match &config.spec.provider {
+                ProviderConfig::Gcp(_) => "gcp",
+                ProviderConfig::Aws(_) => "aws",
+                ProviderConfig::Azure(_) => "azure",
+            }
+        );
+
         // Get source and artifact path based on source type
+        info!("🔍 Checking source: {} '{}' in namespace '{}'", 
+            config.spec.source_ref.kind,
+            config.spec.source_ref.name,
+            config.spec.source_ref.namespace
+        );
+        
         let artifact_path = match config.spec.source_ref.kind.as_str() {
             "GitRepository" => {
                 // FluxCD GitRepository - get artifact path from status
+                info!("📦 Fetching FluxCD GitRepository: {}/{}", 
+                    config.spec.source_ref.namespace,
+                    config.spec.source_ref.name
+                );
+                
                 let git_repo = match Reconciler::get_flux_git_repository(
                     &ctx,
                     &config.spec.source_ref,
                 )
                 .await
                 {
-                    Ok(repo) => repo,
+                    Ok(repo) => {
+                        info!("✅ Successfully retrieved GitRepository: {}/{}", 
+                            config.spec.source_ref.namespace,
+                            config.spec.source_ref.name
+                        );
+                        repo
+                    }
                     Err(e) => {
-                        error!("Failed to get FluxCD GitRepository: {}", e);
+                        // Check if this is a 404 (resource not found) - this is expected and we should wait
+                        // The error is wrapped in anyhow::Error, so we need to check the root cause
+                        let is_404 = e
+                            .chain()
+                            .any(|err| {
+                                if let Some(kube_err) = err.downcast_ref::<kube::Error>() {
+                                    if let kube::Error::Api(api_err) = kube_err {
+                                        return api_err.code == 404;
+                                    }
+                                }
+                                false
+                            });
+
+                        if is_404 {
+                            warn!(
+                                "⏳ GitRepository {}/{} not found yet, will retry in 30s",
+                                config.spec.source_ref.namespace,
+                                config.spec.source_ref.name
+                            );
+                            // Return requeue action - don't treat as error, just wait for resource
+                            return Ok(Action::requeue(std::time::Duration::from_secs(30)));
+                        }
+
+                        // For other errors, log and fail
+                        error!("❌ Failed to get FluxCD GitRepository: {}/{} - {}", 
+                            config.spec.source_ref.namespace,
+                            config.spec.source_ref.name,
+                            e
+                        );
                         observability::metrics::increment_reconciliation_errors();
                         return Err(ReconcilerError::ReconciliationFailed(e));
                     }
@@ -308,24 +420,43 @@ impl Reconciler {
         // Create provider based on provider config
         let provider: Box<dyn SecretManagerProvider> = match &config.spec.provider {
             ProviderConfig::Gcp(gcp_config) => {
+                // Validate GCP config
+                if gcp_config.project_id.is_empty() {
+                    let err = anyhow::anyhow!("GCP projectId is required but is empty");
+                    error!("Validation error for {}: {}", name, err);
+                    return Err(ReconcilerError::ReconciliationFailed(err));
+                }
+
                 // Determine authentication method from config
                 // Default to Workload Identity when auth is not specified
                 let (auth_type, service_account_email_owned) =
                     if let Some(ref auth_config) = gcp_config.auth {
-                        let auth_json = serde_json::to_value(auth_config)
-                            .context("Failed to serialize gcpAuth config")?;
-                        let auth_type_str = auth_json.get("authType").and_then(|t| t.as_str());
-                        if let Some("WorkloadIdentity") = auth_type_str {
-                            let email = auth_json
-                                .get("serviceAccountEmail")
-                                .and_then(|e| e.as_str())
-                                .context("WorkloadIdentity requires serviceAccountEmail")?
-                                .to_string();
-                            (Some("WorkloadIdentity"), Some(email))
-                        } else {
-                            // Default to Workload Identity
-                            info!("No auth type specified, defaulting to Workload Identity");
-                            (Some("WorkloadIdentity"), None)
+                        match serde_json::to_value(auth_config)
+                            .context("Failed to serialize gcpAuth config")
+                        {
+                            Ok(auth_json) => {
+                                let auth_type_str = auth_json.get("authType").and_then(|t| t.as_str());
+                                if let Some("WorkloadIdentity") = auth_type_str {
+                                    match auth_json
+                                        .get("serviceAccountEmail")
+                                        .and_then(|e| e.as_str())
+                                    {
+                                        Some(email) => (Some("WorkloadIdentity"), Some(email.to_string())),
+                                        None => {
+                                            warn!("WorkloadIdentity specified but serviceAccountEmail is missing, using default");
+                                            (Some("WorkloadIdentity"), None)
+                                        }
+                                    }
+                                } else {
+                                    // Default to Workload Identity
+                                    info!("No auth type specified, defaulting to Workload Identity");
+                                    (Some("WorkloadIdentity"), None)
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to serialize GCP auth config: {}", e);
+                                return Err(ReconcilerError::ReconciliationFailed(e));
+                            }
                         }
                     } else {
                         // Default to Workload Identity when auth is not specified
@@ -334,25 +465,41 @@ impl Reconciler {
                     };
 
                 let service_account_email = service_account_email_owned.as_deref();
-                let gcp_client = GcpSecretManagerClient::new(
+                match GcpSecretManagerClient::new(
                     gcp_config.project_id.clone(),
                     auth_type,
                     service_account_email,
                 )
-                .await?;
-                Box::new(gcp_client)
+                .await
+                {
+                    Ok(gcp_client) => Box::new(gcp_client),
+                    Err(e) => {
+                        error!("Failed to create GCP Secret Manager client: {}", e);
+                        return Err(ReconcilerError::ReconciliationFailed(e));
+                    }
+                }
             }
             ProviderConfig::Aws(aws_config) => {
-                let aws_provider = AwsSecretManager::new(aws_config, &ctx.client)
-                    .await
-                    .context("Failed to create AWS Secrets Manager client")?;
-                Box::new(aws_provider)
+                match AwsSecretManager::new(aws_config, &ctx.client).await {
+                    Ok(aws_provider) => Box::new(aws_provider),
+                    Err(e) => {
+                        error!("Failed to create AWS Secrets Manager client: {}", e);
+                        return Err(ReconcilerError::ReconciliationFailed(
+                            e.context("Failed to create AWS Secrets Manager client")
+                        ));
+                    }
+                }
             }
             ProviderConfig::Azure(azure_config) => {
-                let azure_provider = AzureKeyVault::new(azure_config, &ctx.client)
-                    .await
-                    .context("Failed to create Azure Key Vault client")?;
-                Box::new(azure_provider)
+                match AzureKeyVault::new(azure_config, &ctx.client).await {
+                    Ok(azure_provider) => Box::new(azure_provider),
+                    Err(e) => {
+                        error!("Failed to create Azure Key Vault client: {}", e);
+                        return Err(ReconcilerError::ReconciliationFailed(
+                            e.context("Failed to create Azure Key Vault client")
+                        ));
+                    }
+                }
             }
         };
 
@@ -631,7 +778,11 @@ impl Reconciler {
         );
 
         // Create parent directory
-        tokio::fs::create_dir_all(&path_buf.parent().unwrap()).await?;
+        let parent_dir = path_buf.parent().ok_or_else(|| {
+            anyhow::anyhow!("Cannot determine parent directory for path: {}", clone_path)
+        })?;
+        tokio::fs::create_dir_all(parent_dir).await
+            .context(format!("Failed to create parent directory for {}", clone_path))?;
 
         // Clone repository (shallow clone for efficiency)
         // First try shallow clone with branch (works for branch/tag names)

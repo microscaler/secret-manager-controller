@@ -486,7 +486,7 @@ async fn main() -> Result<()> {
             .init();
     }
 
-    info!("Starting Secret Manager Controller");
+    info!("Starting Secret Manager Controller v2");
     info!(
         "Build info: timestamp={}, datetime={}, git_hash={}",
         env!("BUILD_TIMESTAMP"),
@@ -525,8 +525,15 @@ async fn main() -> Result<()> {
     // Check if CRD is queryable before starting the controller
     // This ensures the CRD is installed and the controller can watch for resources
     match configs.list(&ListParams::default().limit(1)).await {
-        Ok(_) => {
+        Ok(list) => {
             info!("CRD is queryable, starting controller watch");
+            info!("Found {} existing SecretManagerConfig resources", list.items.len());
+            for item in &list.items {
+                info!("  - {} in namespace {}", 
+                    item.metadata.name.as_deref().unwrap_or("unknown"),
+                    item.metadata.namespace.as_deref().unwrap_or("default")
+                );
+            }
         }
         Err(e) => {
             error!(
@@ -553,7 +560,14 @@ async fn main() -> Result<()> {
     Controller::new(configs, watcher::Config::default().any_semantic())
         .shutdown_on_signal()
         .run(
-            controller::reconciler::Reconciler::reconcile,
+            |obj, ctx| {
+                let reconciler = ctx.clone();
+                async move {
+                    info!("Reconciling SecretManagerConfig: {}", 
+                        obj.metadata.name.as_deref().unwrap_or("unknown"));
+                    Reconciler::reconcile(obj, reconciler.clone()).await
+                }
+            },
             |obj, error, _ctx| {
                 error!(
                     "Reconciliation error for {}: {:?}",
@@ -565,7 +579,12 @@ async fn main() -> Result<()> {
             },
             reconciler.clone(),
         )
-        .filter_map(|x| async move { std::result::Result::ok(x) })
+        .filter_map(|x| async move { 
+            if let Err(e) = &x {
+                error!("Controller stream error: {:?}", e);
+            }
+            std::result::Result::ok(x) 
+        })
         .for_each(|_| futures::future::ready(()))
         .await;
 
