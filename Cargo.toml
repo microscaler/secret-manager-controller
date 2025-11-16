@@ -50,7 +50,7 @@ tokio = { version = "1", features = ["full"] }
 # This fork uses rustls instead of OpenSSL, eliminating OpenSSL dependency complexity.
 google-cloud-gax-internal = { git = "https://github.com/microscaler/google-cloud-rust", branch = "fix/openssl-tls-issue", package = "google-cloud-gax-internal" }
 google-cloud-secretmanager-v1 = { git = "https://github.com/microscaler/google-cloud-rust", branch = "fix/openssl-tls-issue", package = "google-cloud-secretmanager-v1" }
-google-cloud-auth = { git = "https://github.com/microscaler/google-cloud-rust", branch = "fix/openssl-tls-issue", package = "google-cloud-auth" }
+# Note: google-cloud-auth is not needed - authentication is handled by google-cloud-secretmanager-v1
 
 # AWS Secrets Manager and Parameter Store - using official AWS Rust SDK
 # Match obsctl approach: use default features, aws-smithy-http-client will use rustls-aws-lc via feature unification

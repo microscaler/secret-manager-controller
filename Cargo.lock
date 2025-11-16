@@ -5587,7 +5587,6 @@ dependencies = [
  "dotenv",
  "dotenvy",
  "futures",
- "google-cloud-auth",
  "google-cloud-gax-internal",
  "google-cloud-secretmanager-v1",
  "k8s-openapi",

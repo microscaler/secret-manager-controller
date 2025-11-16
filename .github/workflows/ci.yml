@@ -237,9 +237,9 @@ jobs:
       - name: Set image tag
         id: image
         run: |
-          SHORT_SHA="${GITHUB_SHA:0:8}"
-          IMAGE_NAME="${{ github.repository }}"
-          IMAGE_REF="${{ env.TTL_REGISTRY }}/${IMAGE_NAME}-${SHORT_SHA}:1h"
+          # Generate UUID for ttl.sh image name (as per ttl.sh documentation)
+          IMAGE_UUID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+          IMAGE_REF="${{ env.TTL_REGISTRY }}/${IMAGE_UUID}:1h"
           echo "image_ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
           echo "IMAGE_REF=${IMAGE_REF}" >> $GITHUB_ENV
           echo "✅ Image reference: ${IMAGE_REF}"
