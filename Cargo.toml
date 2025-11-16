@@ -29,6 +29,10 @@ path = "src/controller/crdgen.rs"
 name = "msmctl"
 path = "src/cli.rs"
 
+[[bin]]
+name = "test-sops-decrypt"
+path = "src/bin/test_sops_decrypt.rs"
+
 [dependencies]
 # Kubernetes client
 # Enable client feature for Client, Api, etc.
@@ -44,9 +48,9 @@ tokio = { version = "1", features = ["full"] }
 # GCP Secret Manager - using forked Google Cloud Rust SDK with rustls support
 # Fork: https://github.com/microscaler/google-cloud-rust/tree/fix/openssl-tls-issue
 # This fork uses rustls instead of OpenSSL, eliminating OpenSSL dependency complexity.
-google-cloud-gax-internal = { git = "https://github.com/microscaler/google-cloud-rust", branch = "fix/openssl-tls-issue", package = "google-cloud-gax-internal" }
-google-cloud-secretmanager-v1 = { git = "https://github.com/microscaler/google-cloud-rust", branch = "fix/openssl-tls-issue", package = "google-cloud-secretmanager-v1" }
-google-cloud-auth = { git = "https://github.com/microscaler/google-cloud-rust", branch = "fix/openssl-tls-issue", package = "google-cloud-auth" }
+# Note: Using commit hash for reproducible builds (matches Cargo.lock)
+# google-cloud-gax-internal is a transitive dependency and should be resolved automatically
+google-cloud-secretmanager-v1 = { git = "https://github.com/microscaler/google-cloud-rust", rev = "601d718f825eefc83358a5392fb769181190b2d2", package = "google-cloud-secretmanager-v1" }
 
 # AWS Secrets Manager and Parameter Store - using official AWS Rust SDK
 # Match obsctl approach: use default features, aws-smithy-http-client will use rustls-aws-lc via feature unification
@@ -78,8 +82,13 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9.33"
 dotenv = "0.15"
+dotenvy = "0.15"  # For parsing .env from in-memory buffers
 schemars = "1"
 base64 = "0.22"
+
+# Security: Secure memory handling for secrets (optional - for future hardening)
+# secrecy = "0.10"  # Wrapper types for secret management
+zeroize = { version = "1", features = ["zeroize_derive"] }
 
 # Error handling
 anyhow = "1.0"
@@ -90,9 +99,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # OpenTelemetry
-# Note: Full Otel implementation pending API stabilization
-# Dependencies will be added when implementing full Otel support
-# For now, we support Otel configuration via CRD and log the settings
+opentelemetry = "0.31"
+opentelemetry_sdk = "0.31"
+tracing-opentelemetry = "0.25"
+
+# Datadog OpenTelemetry integration
+# Provides full APM/tracing support with Datadog-specific features
+# Using git dependency as crate is in preview and not yet on crates.io
+datadog-opentelemetry = { git = "https://github.com/DataDog/dd-trace-rs", package = "datadog-opentelemetry" }
 
 # File system operations
 walkdir = "2"
@@ -146,4 +160,53 @@ pact_consumer = "1.4"
 # Force rustls to avoid OpenSSL dependency
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls", "rustls-tls-webpki-roots"] }
 tokio = { version = "1", features = ["full"] }
+
+# Lint configuration following Rust guidelines
+# See: tasks/rust-guidelines.txt (M-STATIC-VERIFICATION)
+[lints.rust]
+ambiguous_negative_literals = "warn"
+missing_debug_implementations = "warn"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+trivial_numeric_casts = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
+
+[lints.clippy]
+cargo = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+# nursery = { level = "warn", priority = -1 }  # optional, might cause more false positives
+
+# These lints are from the `restriction` lint group and prevent specific
+# constructs being used in source code in order to drive up consistency,
+# quality, and brevity
+allow_attributes_without_reason = "warn"
+as_pointer_underscore = "warn"
+assertions_on_result_states = "warn"
+clone_on_ref_ptr = "warn"
+deref_by_slicing = "warn"
+disallowed_script_idents = "warn"
+empty_drop = "warn"
+empty_enum_variants_with_brackets = "warn"
+empty_structs_with_brackets = "warn"
+fn_to_numeric_cast_any = "warn"
+if_then_some_else_none = "warn"
+map_err_ignore = "warn"
+redundant_type_annotations = "warn"
+renamed_function_params = "warn"
+semicolon_outside_block = "warn"
+string_to_string = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unneeded_field_pattern = "warn"
+unused_result_ok = "warn"
+
+# May cause issues with structured logging otherwise.
+literal_string_with_formatting_args = "allow"
 

@@ -42,22 +42,81 @@ def run_command(cmd: List[str], check: bool = True, capture_output: bool = False
 
 
 def wait_for_pact_broker(timeout: int = 120) -> bool:
-    """Wait for Pact broker pod to be ready."""
+    """Wait for Pact broker deployment to be ready."""
     print("Waiting for Pact broker to be ready...")
-    cmd = [
+    namespace = "secret-manager-controller-pact-broker"
+    
+    # Wait for deployment to be available (at least one replica ready)
+    # This is more reliable than waiting for individual pods, especially during rolling updates
+    print("Checking deployment status...")
+    deployment_cmd = [
         "kubectl", "wait",
-        "--for=condition=ready",
-        "pod",
-        "-l", "app=pact-broker",
-        "-n", "secret-manager-controller-pact-broker",
+        "--for=condition=available",
+        "deployment/pact-broker",
+        "-n", namespace,
         f"--timeout={timeout}s"
     ]
     try:
-        run_command(cmd)
-        print("✅ Pact broker is ready")
-        return True
-    except subprocess.CalledProcessError:
-        print("❌ Pact broker failed to become ready")
+        run_command(deployment_cmd, capture_output=True)
+        print("✅ Pact broker deployment is available")
+        
+        # Verify at least one pod is actually ready (deployment condition can be true before pod is ready)
+        print("Verifying pod readiness...")
+        # Use a simpler approach: get all pods and check their status
+        check_cmd = [
+            "kubectl", "get", "pods",
+            "-l", "app=pact-broker",
+            "-n", namespace,
+            "-o", "json"
+        ]
+        check_result = subprocess.run(check_cmd, capture_output=True, text=True, check=False)
+        if check_result.returncode == 0:
+            try:
+                pods_data = json.loads(check_result.stdout)
+                ready_pods = []
+                for pod in pods_data.get("items", []):
+                    phase = pod.get("status", {}).get("phase", "")
+                    conditions = pod.get("status", {}).get("conditions", [])
+                    ready_condition = next(
+                        (c for c in conditions if c.get("type") == "Ready"),
+                        None
+                    )
+                    if phase == "Running" and ready_condition and ready_condition.get("status") == "True":
+                        ready_pods.append(pod.get("metadata", {}).get("name", "unknown"))
+                
+                if ready_pods:
+                    print(f"✅ Found {len(ready_pods)} ready pod(s): {', '.join(ready_pods)}")
+                    return True
+                else:
+                    # If no ready pods found, wait a bit more and check again
+                    print("⚠️  Deployment available but no ready pods found, waiting a bit more...")
+                    time.sleep(5)
+                    check_result = subprocess.run(check_cmd, capture_output=True, text=True, check=False)
+                    if check_result.returncode == 0:
+                        pods_data = json.loads(check_result.stdout)
+                        ready_pods = []
+                        for pod in pods_data.get("items", []):
+                            phase = pod.get("status", {}).get("phase", "")
+                            conditions = pod.get("status", {}).get("conditions", [])
+                            ready_condition = next(
+                                (c for c in conditions if c.get("type") == "Ready"),
+                                None
+                            )
+                            if phase == "Running" and ready_condition and ready_condition.get("status") == "True":
+                                ready_pods.append(pod.get("metadata", {}).get("name", "unknown"))
+                        if ready_pods:
+                            print(f"✅ Found {len(ready_pods)} ready pod(s): {', '.join(ready_pods)}")
+                            return True
+                    print("❌ No ready pods found after deployment became available")
+                    return False
+            except json.JSONDecodeError:
+                print("⚠️  Failed to parse pod status, assuming deployment is ready")
+                return True  # If we can't parse, trust the deployment condition
+        else:
+            print("⚠️  Failed to check pod status, assuming deployment is ready")
+            return True  # If we can't check pods, trust the deployment condition
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Pact broker deployment failed to become available: {e}")
         return False
 
 

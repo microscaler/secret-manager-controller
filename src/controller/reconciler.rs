@@ -34,12 +34,11 @@ use crate::{
 use anyhow::{Context, Result};
 use kube::Client;
 use kube_runtime::controller::Action;
-use md5;
 use regex::Regex;
 use std::path::PathBuf;
 use std::time::Instant;
 use thiserror::Error;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, info_span, warn, Instrument};
 
 /// Construct secret name with prefix, key, and suffix
 /// Matches kustomize-google-secret-manager naming convention for drop-in replacement
@@ -51,7 +50,10 @@ use tracing::{error, info, warn};
 ///
 /// Invalid characters (`.`, `/`, etc.) are replaced with `_` to match GCP Secret Manager requirements
 #[must_use]
-#[allow(clippy::doc_markdown)]
+#[allow(
+    clippy::doc_markdown,
+    reason = "Markdown formatting in doc comments is intentional"
+)]
 #[cfg(test)]
 pub fn construct_secret_name(prefix: Option<&str>, key: &str, suffix: Option<&str>) -> String {
     construct_secret_name_impl(prefix, key, suffix)
@@ -150,8 +152,22 @@ pub struct Reconciler {
     sops_private_key: Option<String>,
 }
 
+impl std::fmt::Debug for Reconciler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reconciler")
+            .field(
+                "sops_private_key",
+                &self.sops_private_key.as_ref().map(|_| "***"),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 impl Reconciler {
-    #[allow(clippy::missing_errors_doc)]
+    #[allow(
+        clippy::missing_errors_doc,
+        reason = "Error documentation is provided in doc comments"
+    )]
     pub async fn new(client: Client) -> Result<Self> {
         // Provider is created per-reconciliation based on provider config
         // Per-resource auth config is handled in reconcile()
@@ -217,7 +233,11 @@ impl Reconciler {
         Ok(None)
     }
 
-    #[allow(clippy::too_many_lines, clippy::missing_errors_doc)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::missing_errors_doc,
+        reason = "Reconciliation logic is complex and error docs are in comments"
+    )]
     pub async fn reconcile(
         config: std::sync::Arc<SecretManagerConfig>,
         ctx: std::sync::Arc<Reconciler>,
@@ -233,7 +253,11 @@ impl Reconciler {
         }
     }
 
-    #[allow(clippy::too_many_lines, clippy::missing_errors_doc)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::missing_errors_doc,
+        reason = "Reconciliation logic is complex and error docs are in comments"
+    )]
     async fn reconcile_internal(
         config: std::sync::Arc<SecretManagerConfig>,
         ctx: std::sync::Arc<Reconciler>,
@@ -241,16 +265,30 @@ impl Reconciler {
         let start = Instant::now();
         let name = config.metadata.name.as_deref().unwrap_or("unknown");
 
+        // Create OpenTelemetry span for this reconciliation
+        // This provides distributed tracing when Datadog/OTel is configured
+        // The span will automatically be exported to Datadog if configured
+        let provider_type = match &config.spec.provider {
+            crate::ProviderConfig::Gcp(_) => "gcp",
+            crate::ProviderConfig::Aws(_) => "aws",
+            crate::ProviderConfig::Azure(_) => "azure",
+        };
+        let span = tracing::span!(
+            tracing::Level::INFO,
+            "reconcile",
+            resource.name = name,
+            resource.namespace = config.metadata.namespace.as_deref().unwrap_or("default"),
+            resource.kind = "SecretManagerConfig",
+            resource.provider = provider_type
+        );
+        let _guard = span.enter();
+
         // Comprehensive validation of all CRD fields
         if let Err(e) = Self::validate_secret_manager_config(&config) {
             error!("Validation error for {}: {}", name, e);
             // Update status to Failed with validation error
             let _ = ctx
-                .update_status_phase(
-                    &config,
-                    "Failed",
-                    Some(&format!("Validation failed: {}", e)),
-                )
+                .update_status_phase(&config, "Failed", Some(&format!("Validation failed: {e}")))
                 .await;
             return Err(ReconcilerError::ReconciliationFailed(e));
         }
@@ -259,7 +297,7 @@ impl Reconciler {
         if let Err(e) = Self::validate_duration_interval(
             &config.spec.git_repository_pull_interval,
             "gitRepositoryPullInterval",
-            60,
+            crate::constants::MIN_GITREPOSITORY_PULL_INTERVAL_SECS,
         ) {
             let err = anyhow::anyhow!(
                 "Invalid gitRepositoryPullInterval '{}': {}",
@@ -272,7 +310,7 @@ impl Reconciler {
                 .update_status_phase(
                     &config,
                     "Failed",
-                    Some(&format!("Invalid gitRepositoryPullInterval: {}", e)),
+                    Some(&format!("Invalid gitRepositoryPullInterval: {e}")),
                 )
                 .await;
             return Err(ReconcilerError::ReconciliationFailed(err));
@@ -282,7 +320,7 @@ impl Reconciler {
         if let Err(e) = Self::validate_duration_interval(
             &config.spec.reconcile_interval,
             "reconcileInterval",
-            60,
+            crate::constants::MIN_RECONCILE_INTERVAL_SECS,
         ) {
             let err = anyhow::anyhow!(
                 "Invalid reconcileInterval '{}': {}",
@@ -295,10 +333,34 @@ impl Reconciler {
                 .update_status_phase(
                     &config,
                     "Failed",
-                    Some(&format!("Invalid reconcileInterval: {}", e)),
+                    Some(&format!("Invalid reconcileInterval: {e}")),
                 )
                 .await;
             return Err(ReconcilerError::ReconciliationFailed(err));
+        }
+
+        // Check if reconciliation is suspended
+        // Suspended resources skip reconciliation entirely, even for manual triggers
+        // This is useful for troubleshooting or during intricate CI/CD transitions
+        if config.spec.suspend {
+            info!(
+                "Reconciliation suspended for SecretManagerConfig: {} - skipping reconciliation",
+                name
+            );
+            // Update status to indicate suspended state
+            if let Err(e) = ctx
+                .update_status_phase(
+                    &config,
+                    "Suspended",
+                    Some("Reconciliation is suspended - no secrets will be synced"),
+                )
+                .await
+            {
+                warn!("Failed to update status to Suspended: {}", e);
+            }
+            // Return Action::await_change() to wait for suspend to be cleared
+            // This ensures we don't reconcile until suspend is set to false
+            return Ok(Action::await_change());
         }
 
         // Check if this is a manual reconciliation trigger (via annotation)
@@ -362,9 +424,46 @@ impl Reconciler {
             config.spec.source_ref.namespace
         );
 
+        // Determine artifact path based on source type (GitRepository vs Application)
+        // This path points to the cloned/checked-out repository directory containing secrets
         let artifact_path = match config.spec.source_ref.kind.as_str() {
             "GitRepository" => {
-                // Update status to Cloning
+                // FluxCD GitRepository: Extract artifact path from GitRepository status
+                // The GitRepository controller clones the repo and exposes the path in status.artifact.path
+
+                // Check if Git pulls should be suspended
+                // If suspendGitPulls is true, we need to ensure the GitRepository is suspended
+                // This allows reconciliation to continue with the last pulled commit
+                if config.spec.suspend_git_pulls {
+                    info!(
+                        "⏸️  Git pulls suspended - ensuring GitRepository {}/{} is suspended",
+                        config.spec.source_ref.namespace, config.spec.source_ref.name
+                    );
+                    if let Err(e) = ctx
+                        .suspend_git_repository(
+                            &config.spec.source_ref,
+                            true, // suspend
+                        )
+                        .await
+                    {
+                        warn!("Failed to suspend GitRepository: {}", e);
+                        // Continue anyway - GitRepository might already be suspended
+                    }
+                } else {
+                    // Ensure GitRepository is not suspended if suspendGitPulls is false
+                    if let Err(e) = ctx
+                        .suspend_git_repository(
+                            &config.spec.source_ref,
+                            false, // resume
+                        )
+                        .await
+                    {
+                        warn!("Failed to resume GitRepository: {}", e);
+                        // Continue anyway - GitRepository might already be active
+                    }
+                }
+
+                // Update status to Cloning - indicates we're fetching the GitRepository
                 if let Err(e) = ctx
                     .update_status_phase(
                         &config,
@@ -376,7 +475,8 @@ impl Reconciler {
                     warn!("Failed to update status to Cloning: {}", e);
                 }
 
-                // FluxCD GitRepository - get artifact path from status
+                // Fetch GitRepository resource from Kubernetes API
+                // This gives us access to the cloned repository path
                 info!(
                     "📦 Fetching FluxCD GitRepository: {}/{}",
                     config.spec.source_ref.namespace, config.spec.source_ref.name
@@ -399,10 +499,10 @@ impl Reconciler {
                         // Check if this is a 404 (resource not found) - this is expected and we should wait
                         // The error is wrapped in anyhow::Error, so we need to check the root cause
                         let is_404 = e.chain().any(|err| {
-                            if let Some(kube_err) = err.downcast_ref::<kube::Error>() {
-                                if let kube::Error::Api(api_err) = kube_err {
-                                    return api_err.code == 404;
-                                }
+                            if let Some(kube::Error::Api(api_err)) =
+                                err.downcast_ref::<kube::Error>()
+                            {
+                                return api_err.code == 404;
                             }
                             false
                         });
@@ -421,7 +521,9 @@ impl Reconciler {
                                 )
                                 .await;
                             // Return requeue action - don't treat as error, just wait for resource
-                            return Ok(Action::requeue(std::time::Duration::from_secs(30)));
+                            return Ok(Action::requeue(std::time::Duration::from_secs(
+                                crate::constants::DEFAULT_GITREPOSITORY_NOT_FOUND_REQUEUE_SECS,
+                            )));
                         }
 
                         // For other errors, log and fail
@@ -435,13 +537,15 @@ impl Reconciler {
                             .update_status_phase(
                                 &config,
                                 "Failed",
-                                Some(&format!("Clone failed, repo unavailable: {}", e)),
+                                Some(&format!("Clone failed, repo unavailable: {e}")),
                             )
                             .await;
                         return Err(ReconcilerError::ReconciliationFailed(e));
                     }
                 };
 
+                // Extract artifact path from GitRepository status
+                // Path format: /tmp/flux-source-{namespace}-{name}/...
                 match Reconciler::get_flux_artifact_path(&ctx, &git_repo) {
                     Ok(path) => {
                         info!(
@@ -452,14 +556,15 @@ impl Reconciler {
                         path
                     }
                     Err(e) => {
+                        // Artifact path extraction failed - GitRepository may not be ready yet
                         error!("Failed to get FluxCD artifact path: {}", e);
                         observability::metrics::increment_reconciliation_errors();
-                        // Update status to Failed
+                        // Update status to Failed - this is a permanent error (not retryable)
                         let _ = ctx
                             .update_status_phase(
                                 &config,
                                 "Failed",
-                                Some(&format!("Failed to get artifact path: {}", e)),
+                                Some(&format!("Failed to get artifact path: {e}")),
                             )
                             .await;
                         return Err(ReconcilerError::ReconciliationFailed(e));
@@ -467,7 +572,9 @@ impl Reconciler {
                 }
             }
             "Application" => {
-                // ArgoCD Application - get Git source and clone/access repository
+                // ArgoCD Application: Clone repository directly
+                // Unlike FluxCD, ArgoCD doesn't expose artifact paths, so we clone ourselves
+                // This supports both GitRepository and Helm sources
                 match Reconciler::get_argocd_artifact_path(&ctx, &config.spec.source_ref).await {
                     Ok(path) => {
                         info!(
@@ -494,10 +601,16 @@ impl Reconciler {
             }
         };
 
-        // Create provider based on provider config
+        // Create provider client based on provider configuration
+        // Each provider has different authentication methods:
+        // - GCP: Workload Identity (default)
+        // - AWS: IRSA - IAM Roles for Service Accounts (default)
+        // - Azure: Workload Identity or Managed Identity (default)
+        // Provider is created per-reconciliation to support per-resource auth config
         let provider: Box<dyn SecretManagerProvider> = match &config.spec.provider {
             ProviderConfig::Gcp(gcp_config) => {
-                // Validate GCP config
+                // GCP Secret Manager provider
+                // Validate required GCP configuration
                 if gcp_config.project_id.is_empty() {
                     let err = anyhow::anyhow!("GCP projectId is required but is empty");
                     error!("Validation error for {}: {}", name, err);
@@ -506,6 +619,7 @@ impl Reconciler {
 
                 // Determine authentication method from config
                 // Default to Workload Identity when auth is not specified
+                // Workload Identity requires GKE with WI enabled and service account annotation
                 let (auth_type, service_account_email_owned) = if let Some(ref auth_config) =
                     gcp_config.auth
                 {
@@ -583,22 +697,27 @@ impl Reconciler {
             }
         };
 
-        // Determine what we're syncing and update status accordingly
+        // Determine sync mode: secrets vs configs (properties)
+        // Configs are stored in config stores (Parameter Store, App Configuration)
+        // Secrets are stored in secret stores (Secret Manager, Key Vault)
         let is_configs_enabled = config
             .spec
             .configs
             .as_ref()
             .map(|c| c.enabled)
             .unwrap_or(false);
+
+        // Generate status description based on what we're syncing
+        // This helps users understand what the controller is doing
         let description = if is_configs_enabled {
-            // Check provider to determine config store type
+            // Syncing to config stores (non-secret configuration values)
             match &config.spec.provider {
                 ProviderConfig::Gcp(_) => "Reconciling properties to Parameter Manager",
                 ProviderConfig::Aws(_) => "Reconciling properties to Parameter Store",
                 ProviderConfig::Azure(_) => "Reconciling properties to App Configuration",
             }
         } else {
-            // Syncing secrets
+            // Syncing to secret stores (sensitive values)
             match &config.spec.provider {
                 ProviderConfig::Gcp(_) => "Reconciling secrets to Secret Manager",
                 ProviderConfig::Aws(_) => "Reconciling secrets to Secrets Manager",
@@ -606,7 +725,7 @@ impl Reconciler {
             }
         };
 
-        // Update status to Updating before syncing
+        // Update status to Updating - indicates we're actively syncing secrets/configs
         if let Err(e) = ctx
             .update_status_phase(&config, "Updating", Some(description))
             .await
@@ -616,10 +735,14 @@ impl Reconciler {
 
         let mut secrets_synced = 0;
 
-        // Check if kustomize_path is specified - use kustomize build mode
+        // Determine processing mode: kustomize build vs raw file parsing
+        // Kustomize mode: Extract secrets from kustomize-generated Secret resources
+        // Raw file mode: Parse application.secrets.env files directly
         if let Some(kustomize_path) = &config.spec.secrets.kustomize_path {
-            // Use kustomize build to extract secrets from generated Secret resources
-            // This supports overlays, patches, and generators
+            // Kustomize Build Mode
+            // Runs `kustomize build` to generate Kubernetes manifests, then extracts Secret resources
+            // Supports overlays, patches, generators, and other kustomize features
+            // This is the recommended mode for complex deployments with multiple environments
             info!("Using kustomize build mode on path: {}", kustomize_path);
 
             match crate::controller::kustomize::extract_secrets_from_kustomize(
@@ -634,7 +757,7 @@ impl Reconciler {
                     {
                         Ok(count) => {
                             secrets_synced += count;
-                            info!("Synced {} secrets from kustomize build", count);
+                            info!("✅ Synced {} secrets from kustomize build", count);
                         }
                         Err(e) => {
                             error!("Failed to process kustomize secrets: {}", e);
@@ -644,7 +767,7 @@ impl Reconciler {
                                 .update_status_phase(
                                     &config,
                                     "Failed",
-                                    Some(&format!("Failed to process kustomize secrets: {}", e)),
+                                    Some(&format!("Failed to process kustomize secrets: {e}")),
                                 )
                                 .await;
                             return Err(ReconcilerError::ReconciliationFailed(e));
@@ -659,17 +782,23 @@ impl Reconciler {
                         .update_status_phase(
                             &config,
                             "Failed",
-                            Some(&format!("Failed to extract secrets from kustomize: {}", e)),
+                            Some(&format!("Failed to extract secrets from kustomize: {e}")),
                         )
                         .await;
                     return Err(ReconcilerError::ReconciliationFailed(e));
                 }
             }
         } else {
-            // Use raw file mode - read application.secrets.env files directly
+            // Raw File Mode
+            // Directly parses application.secrets.env, application.secrets.yaml, and application.properties files
+            // Simpler than kustomize mode but doesn't support overlays or generators
+            // Suitable for simple deployments or when kustomize isn't needed
             info!("Using raw file mode");
 
             // Find application files for the specified environment
+            // Searches for files matching patterns like:
+            // - {basePath}/profiles/{environment}/application.secrets.env
+            // - {basePath}/{service}/profiles/{environment}/application.secrets.env
             // Pass secret_prefix as default_service_name for single service deployments
             let default_service_name = config.spec.secrets.prefix.as_deref();
             let application_files = match parser::find_application_files(
@@ -692,14 +821,17 @@ impl Reconciler {
                         .update_status_phase(
                             &config,
                             "Failed",
-                            Some(&format!("Failed to find application files: {}", e)),
+                            Some(&format!("Failed to find application files: {e}")),
                         )
                         .await;
                     return Err(ReconcilerError::ReconciliationFailed(e));
                 }
             };
 
-            info!("Found {} application file sets", application_files.len());
+            info!(
+                "📋 Found {} application file set(s) to process",
+                application_files.len()
+            );
 
             // Process each application file set
             for app_files in application_files {
@@ -709,10 +841,19 @@ impl Reconciler {
                 {
                     Ok(count) => {
                         secrets_synced += count;
-                        info!("Synced {} secrets for {}", count, app_files.service_name);
+                        info!(
+                            "✅ Synced {} secrets for service: {}",
+                            count, app_files.service_name
+                        );
                     }
                     Err(e) => {
-                        error!("Failed to process {}: {}", app_files.service_name, e);
+                        // Log error but continue processing other services
+                        // This allows partial success when multiple services are configured
+                        error!(
+                            "❌ Failed to process service {}: {}",
+                            app_files.service_name, e
+                        );
+                        observability::metrics::increment_reconciliation_errors();
                     }
                 }
             }
@@ -725,48 +866,121 @@ impl Reconciler {
             return Err(ReconcilerError::ReconciliationFailed(e));
         }
 
+        // Clear manual trigger annotation if present (msmctl reconcile)
+        // This prevents the annotation from triggering repeated reconciliations
+        if is_manual_trigger {
+            if let Err(e) = ctx.clear_manual_trigger_annotation(&config).await {
+                warn!("Failed to clear manual trigger annotation: {}", e);
+                // Don't fail reconciliation if annotation clearing fails
+            } else {
+                debug!("Cleared manual trigger annotation after successful reconciliation");
+            }
+        }
+
         // Update metrics
         observability::metrics::observe_reconciliation_duration(start.elapsed().as_secs_f64());
         observability::metrics::set_secrets_managed(i64::from(secrets_synced));
 
         info!(
-            "Reconciliation complete for {} (synced {} secrets)",
+            "✅ Reconciliation complete for {}: {} secrets synced successfully",
             name, secrets_synced
         );
-        Ok(Action::await_change())
+
+        // Honor the reconcile interval from the resource spec
+        // Each resource has its own reconcileInterval and maintains its own error count
+        // Parse the reconcile interval and requeue after that duration
+        // This ensures we don't reconcile more frequently than specified per resource
+        match Self::parse_kubernetes_duration(&config.spec.reconcile_interval) {
+            Ok(duration) => {
+                // Successfully parsed - use the specified interval for THIS resource
+                // Reset any parsing error count by clearing the annotation if it exists
+                // This resets backoff when parsing succeeds again for this specific resource
+                let _ = ctx.clear_parsing_error_count(&config).await;
+
+                debug!(
+                    "Requeueing reconciliation for {} after {}s (reconcileInterval: {})",
+                    name,
+                    duration.as_secs(),
+                    config.spec.reconcile_interval
+                );
+                Ok(Action::requeue(duration))
+            }
+            Err(e) => {
+                // Parsing failed for THIS resource - use Fibonacci-based progressive backoff
+                // Each resource tracks its own error count independently via annotations
+                // Track parsing errors in metrics and use Fibonacci backoff (1m -> 1m -> 2m -> 3m -> 5m -> ... -> 60m max)
+                observability::metrics::increment_duration_parsing_errors();
+
+                // Get current parsing error count for THIS resource from its annotations
+                // Each resource maintains its own error count, so resources don't affect each other
+                let error_count = Reconciler::get_parsing_error_count(&config);
+                let backoff_duration = Reconciler::calculate_progressive_backoff(error_count);
+
+                // Update error count in THIS resource's annotations for next reconciliation
+                // This persists the error count across controller restarts, per resource
+                let _ = ctx
+                    .increment_parsing_error_count(&config, error_count)
+                    .await;
+
+                error!(
+                    "Failed to parse reconcileInterval '{}' for resource {}: {}. Using Fibonacci backoff: {}s (error count: {})",
+                    config.spec.reconcile_interval, name, e, backoff_duration.as_secs(), error_count + 1
+                );
+
+                Ok(Action::requeue(backoff_duration))
+            }
+        }
     }
 
     /// Get FluxCD GitRepository resource
-    #[allow(clippy::doc_markdown, clippy::missing_errors_doc)]
+    #[allow(
+        clippy::doc_markdown,
+        clippy::missing_errors_doc,
+        reason = "Markdown formatting is intentional and error docs are in comments"
+    )]
     async fn get_flux_git_repository(&self, source_ref: &SourceRef) -> Result<serde_json::Value> {
         // Use Kubernetes API to get GitRepository
         // GitRepository is a CRD from source.toolkit.fluxcd.io/v1beta2
         use kube::api::ApiResource;
         use kube::core::DynamicObject;
 
-        let ar = ApiResource::from_gvk(&kube::core::GroupVersionKind {
-            group: "source.toolkit.fluxcd.io".to_string(),
-            version: "v1beta2".to_string(),
-            kind: "GitRepository".to_string(),
-        });
+        let span = info_span!(
+            "gitrepository.get_artifact",
+            gitrepository.name = source_ref.name,
+            namespace = source_ref.namespace
+        );
+        let span_clone = span.clone();
+        let start = Instant::now();
 
-        let api: kube::Api<DynamicObject> =
-            kube::Api::namespaced_with(self.client.clone(), &source_ref.namespace, &ar);
+        async move {
+            let ar = ApiResource::from_gvk(&kube::core::GroupVersionKind {
+                group: "source.toolkit.fluxcd.io".to_string(),
+                version: "v1beta2".to_string(),
+                kind: "GitRepository".to_string(),
+            });
 
-        let git_repo = api.get(&source_ref.name).await.context(format!(
-            "Failed to get FluxCD GitRepository: {}/{}",
-            source_ref.namespace, source_ref.name
-        ))?;
+            let api: kube::Api<DynamicObject> =
+                kube::Api::namespaced_with(self.client.clone(), &source_ref.namespace, &ar);
 
-        Ok(serde_json::to_value(git_repo)?)
+            let git_repo = api.get(&source_ref.name).await.context(format!(
+                "Failed to get FluxCD GitRepository: {}/{}",
+                source_ref.namespace, source_ref.name
+            ))?;
+
+            span_clone.record("operation.duration_ms", start.elapsed().as_millis() as u64);
+            span_clone.record("operation.success", true);
+            Ok(serde_json::to_value(git_repo)?)
+        }
+        .instrument(span)
+        .await
     }
 
     /// Get artifact path from FluxCD GitRepository status
     #[allow(
         clippy::doc_markdown,
-        clippy::unused_async,
         clippy::missing_errors_doc,
-        clippy::unused_self
+        clippy::unused_self,
+        reason = "Markdown formatting is intentional, error docs in comments, self needed for trait"
     )]
     fn get_flux_artifact_path(&self, git_repo: &serde_json::Value) -> Result<PathBuf> {
         // Extract artifact path from GitRepository status
@@ -810,7 +1024,8 @@ impl Reconciler {
         clippy::doc_markdown,
         clippy::missing_errors_doc,
         clippy::unused_async,
-        clippy::too_many_lines
+        clippy::too_many_lines,
+        reason = "Markdown formatting is intentional, error docs in comments, async signature matches trait, complex logic"
     )]
     async fn get_argocd_artifact_path(&self, source_ref: &SourceRef) -> Result<PathBuf> {
         use kube::api::ApiResource;
@@ -920,43 +1135,42 @@ impl Reconciler {
         }
 
         // Clone the repository using git command
-        info!(
-            "Cloning ArgoCD repository: {} (revision: {})",
-            repo_url, target_revision
+        let clone_path_for_match = clone_path.clone();
+        let path_buf_for_match = path_buf.clone();
+        let span = info_span!(
+            "git.clone",
+            repository.url = repo_url,
+            clone.path = clone_path,
+            revision = target_revision
         );
+        let span_clone_for_match = span.clone();
+        let span_clone = span.clone();
+        let start = Instant::now();
 
-        // Create parent directory
-        let parent_dir = path_buf.parent().ok_or_else(|| {
-            anyhow::anyhow!("Cannot determine parent directory for path: {}", clone_path)
-        })?;
-        tokio::fs::create_dir_all(parent_dir)
-            .await
-            .context(format!(
-                "Failed to create parent directory for {}",
-                clone_path
-            ))?;
+        let clone_result = async move {
+            info!(
+                "Cloning ArgoCD repository: {} (revision: {})",
+                repo_url, target_revision
+            );
 
-        // Clone repository (shallow clone for efficiency)
-        // First try shallow clone with branch (works for branch/tag names)
-        let clone_output = tokio::process::Command::new("git")
-            .arg("clone")
-            .arg("--depth")
-            .arg("1")
-            .arg("--branch")
-            .arg(target_revision)
-            .arg(repo_url)
-            .arg(&clone_path)
-            .output()
-            .await
-            .context(format!("Failed to execute git clone for {repo_url}"))?;
+            // Create parent directory
+            let parent_dir = path_buf.parent().ok_or_else(|| {
+                anyhow::anyhow!("Cannot determine parent directory for path: {clone_path}")
+            })?;
+            tokio::fs::create_dir_all(parent_dir)
+                .await
+                .context(format!(
+                    "Failed to create parent directory for {clone_path}"
+                ))?;
 
-        if !clone_output.status.success() {
-            // If branch clone fails, clone default branch and checkout specific revision
-            // This handles commit SHAs and other revision types
+            // Clone repository (shallow clone for efficiency)
+            // First try shallow clone with branch (works for branch/tag names)
             let clone_output = tokio::process::Command::new("git")
                 .arg("clone")
                 .arg("--depth")
-                .arg("50") // Deeper clone to ensure revision is available
+                .arg("1")
+                .arg("--branch")
+                .arg(target_revision)
                 .arg(repo_url)
                 .arg(&clone_path)
                 .output()
@@ -964,52 +1178,95 @@ impl Reconciler {
                 .context(format!("Failed to execute git clone for {repo_url}"))?;
 
             if !clone_output.status.success() {
-                let error_msg = String::from_utf8_lossy(&clone_output.stderr);
-                return Err(anyhow::anyhow!(
-                    "Failed to clone repository {repo_url}: {error_msg}"
-                ));
+                // If branch clone fails, clone default branch and checkout specific revision
+                // This handles commit SHAs and other revision types
+                let clone_output = tokio::process::Command::new("git")
+                    .arg("clone")
+                    .arg("--depth")
+                    .arg("50") // Deeper clone to ensure revision is available
+                    .arg(repo_url)
+                    .arg(&clone_path)
+                    .output()
+                    .await
+                    .context(format!("Failed to execute git clone for {repo_url}"))?;
+
+                if !clone_output.status.success() {
+                    let error_msg = String::from_utf8_lossy(&clone_output.stderr);
+                    span_clone.record("operation.success", false);
+                    span_clone.record("error.message", error_msg.to_string());
+                    observability::metrics::increment_git_clone_errors_total();
+                    return Err(anyhow::anyhow!(
+                        "Failed to clone repository {repo_url}: {error_msg}"
+                    ));
+                }
+
+                // Fetch the specific revision if needed
+                let _fetch_output = tokio::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&clone_path)
+                    .arg("fetch")
+                    .arg("--depth")
+                    .arg("50")
+                    .arg("origin")
+                    .arg(target_revision)
+                    .output()
+                    .await;
+
+                // Checkout specific revision
+                let checkout_output = tokio::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&clone_path)
+                    .arg("checkout")
+                    .arg(target_revision)
+                    .output()
+                    .await
+                    .context(format!(
+                        "Failed to checkout revision {target_revision} in repository {repo_url}"
+                    ))?;
+
+                if !checkout_output.status.success() {
+                    let error_msg = String::from_utf8_lossy(&checkout_output.stderr);
+                    span_clone.record("operation.success", false);
+                    span_clone.record("error.message", error_msg.to_string());
+                    observability::metrics::increment_git_clone_errors_total();
+                    return Err(anyhow::anyhow!(
+                        "Failed to checkout revision {target_revision} in repository {repo_url}: {error_msg}"
+                    ));
+                }
             }
 
-            // Fetch the specific revision if needed
-            let _fetch_output = tokio::process::Command::new("git")
-                .arg("-C")
-                .arg(&clone_path)
-                .arg("fetch")
-                .arg("--depth")
-                .arg("50")
-                .arg("origin")
-                .arg(target_revision)
-                .output()
-                .await;
+            Ok(())
+        }
+        .instrument(span)
+        .await;
 
-            // Checkout specific revision
-            let checkout_output = tokio::process::Command::new("git")
-                .arg("-C")
-                .arg(&clone_path)
-                .arg("checkout")
-                .arg(target_revision)
-                .output()
-                .await
-                .context(format!(
-                    "Failed to checkout revision {target_revision} in repository {repo_url}"
-                ))?;
-
-            if !checkout_output.status.success() {
-                let error_msg = String::from_utf8_lossy(&checkout_output.stderr);
-                return Err(anyhow::anyhow!(
-                    "Failed to checkout revision {target_revision} in repository {repo_url}: {error_msg}"
-                ));
+        match clone_result {
+            Ok(_) => {
+                span_clone_for_match
+                    .record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                span_clone_for_match.record("operation.success", true);
+                observability::metrics::increment_git_clone_total();
+                observability::metrics::observe_git_clone_duration(start.elapsed().as_secs_f64());
+                info!(
+                    "Successfully cloned ArgoCD repository to {} (revision: {})",
+                    clone_path_for_match, target_revision
+                );
+                Ok(path_buf_for_match)
+            }
+            Err(e) => {
+                span_clone_for_match
+                    .record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                span_clone_for_match.record("operation.success", false);
+                Err(e)
             }
         }
-
-        info!(
-            "Successfully cloned ArgoCD repository to {} (revision: {})",
-            clone_path, target_revision
-        );
-        Ok(path_buf)
     }
 
-    #[allow(clippy::too_many_lines, clippy::unused_async)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::unused_async,
+        reason = "Complex file processing logic, async signature matches trait"
+    )]
     async fn process_application_files(
         &self,
         provider: &dyn SecretManagerProvider,
@@ -1017,16 +1274,22 @@ impl Reconciler {
         app_files: &parser::ApplicationFiles,
         ctx: &Reconciler,
     ) -> Result<i32> {
-        let secret_prefix = config
+        let service_name = config
             .spec
             .secrets
             .prefix
             .as_deref()
             .unwrap_or(&app_files.service_name);
+        let span = info_span!("files.process", service.name = service_name);
+        let span_clone_for_match = span.clone();
+        let start = Instant::now();
 
-        // Parse secrets from files (with SOPS decryption if needed)
-        let secrets = parser::parse_secrets(app_files, self.sops_private_key.as_deref()).await?;
-        let properties = parser::parse_properties(app_files).await?;
+        let result = async move {
+            let secret_prefix = service_name;
+
+            // Parse secrets from files (with SOPS decryption if needed)
+            let secrets = parser::parse_secrets(app_files, self.sops_private_key.as_deref()).await?;
+            let properties = parser::parse_properties(app_files).await?;
 
         // Store secrets in cloud provider (GitOps: Git is source of truth)
         let mut count = 0;
@@ -1224,8 +1487,28 @@ impl Reconciler {
             }
         }
 
-        observability::metrics::increment_secrets_synced(i64::from(count));
-        Ok(count)
+            observability::metrics::increment_secrets_synced(i64::from(count));
+            Ok(count)
+        }
+        .instrument(span)
+        .await;
+
+        match &result {
+            Ok(count) => {
+                span_clone_for_match.record("files.count", *count as u64);
+                span_clone_for_match
+                    .record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                span_clone_for_match.record("operation.success", true);
+            }
+            Err(e) => {
+                span_clone_for_match
+                    .record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                span_clone_for_match.record("operation.success", false);
+                span_clone_for_match.record("error.message", e.to_string());
+            }
+        }
+
+        result
     }
 
     async fn process_kustomize_secrets(
@@ -1284,6 +1567,23 @@ impl Reconciler {
     ) -> Result<()> {
         use kube::api::PatchParams;
 
+        // CRITICAL: Check if status actually changed before updating
+        // This prevents unnecessary status updates that trigger watch events
+        let current_phase = config.status.as_ref().and_then(|s| s.phase.as_deref());
+        let current_description = config
+            .status
+            .as_ref()
+            .and_then(|s| s.description.as_deref());
+
+        // Only update if phase or description actually changed
+        if current_phase == Some(phase) && current_description == message.as_deref() {
+            debug!(
+                "Skipping status update - phase and description unchanged: phase={:?}, description={:?}",
+                phase, message
+            );
+            return Ok(());
+        }
+
         let api: kube::Api<SecretManagerConfig> = kube::Api::namespaced(
             self.client.clone(),
             config.metadata.namespace.as_deref().unwrap_or("default"),
@@ -1307,12 +1607,25 @@ impl Reconciler {
             message: message.map(|s| s.to_string()),
         });
 
+        // Calculate next reconcile time based on reconcile interval
+        let next_reconcile_time = Self::parse_kubernetes_duration(&config.spec.reconcile_interval)
+            .ok()
+            .map(|duration| {
+                chrono::Utc::now()
+                    .checked_add_signed(
+                        chrono::Duration::from_std(duration).unwrap_or(chrono::Duration::zero()),
+                    )
+                    .map(|dt| dt.to_rfc3339())
+            })
+            .flatten();
+
         let status = SecretManagerConfigStatus {
             phase: Some(phase.to_string()),
             description: message.map(|s| s.to_string()),
             conditions,
             observed_generation: config.metadata.generation,
             last_reconcile_time: Some(chrono::Utc::now().to_rfc3339()),
+            next_reconcile_time,
             secrets_synced: None,
         };
 
@@ -1330,13 +1643,228 @@ impl Reconciler {
         Ok(())
     }
 
-    async fn update_status(&self, config: &SecretManagerConfig, secrets_synced: i32) -> Result<()> {
+    /// Calculate progressive backoff duration based on error count using Fibonacci sequence
+    /// Fibonacci backoff: 1m -> 1m -> 2m -> 3m -> 5m -> 8m -> 13m -> 21m -> 34m -> 55m -> 60m (1 hour max)
+    /// This prevents controller overload when parsing errors occur
+    /// Each resource maintains its own error count independently
+    fn calculate_progressive_backoff(error_count: u32) -> std::time::Duration {
+        // Fibonacci sequence for backoff (in minutes): 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, then cap at 60
+        // This provides exponential growth that naturally slows down as errors accumulate
+        let backoff_minutes = match error_count {
+            0 => 1,  // First error: 1 minute
+            1 => 1,  // Second error: 1 minute
+            2 => 2,  // Third error: 2 minutes
+            3 => 3,  // Fourth error: 3 minutes
+            4 => 5,  // Fifth error: 5 minutes
+            5 => 8,  // Sixth error: 8 minutes
+            6 => 13, // Seventh error: 13 minutes
+            7 => 21, // Eighth error: 21 minutes
+            8 => 34, // Ninth error: 34 minutes
+            9 => 55, // Tenth error: 55 minutes
+            _ => 60, // Eleventh+ error: 60 minutes (1 hour max)
+        };
+
+        std::time::Duration::from_secs(backoff_minutes * 60)
+    }
+
+    /// Get parsing error count from resource annotations
+    /// Each resource maintains its own error count independently
+    /// Returns the current error count for THIS resource or 0 if not set
+    fn get_parsing_error_count(config: &SecretManagerConfig) -> u32 {
+        // Each resource has its own annotations, so error counts are per-resource
+        config
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|ann| {
+                ann.get("secret-management.microscaler.io/duration-parsing-errors")
+                    .and_then(|v| v.parse::<u32>().ok())
+            })
+            .unwrap_or(0)
+    }
+
+    /// Increment parsing error count in resource annotations
+    /// Each resource maintains its own error count independently
+    /// This persists the error count across reconciliations and controller restarts
+    async fn increment_parsing_error_count(
+        &self,
+        config: &SecretManagerConfig,
+        current_count: u32,
+    ) -> Result<()> {
+        use kube::api::PatchParams;
+
+        // Each resource is patched individually, so error counts are per-resource
+        let api: kube::Api<SecretManagerConfig> = kube::Api::namespaced(
+            self.client.clone(),
+            config.metadata.namespace.as_deref().unwrap_or("default"),
+        );
+
+        let new_count = current_count + 1;
+        let patch = serde_json::json!({
+            "metadata": {
+                "annotations": {
+                    "secret-management.microscaler.io/duration-parsing-errors": new_count.to_string()
+                }
+            }
+        });
+
+        // Patch THIS specific resource's annotations
+        // Other resources are unaffected
+        api.patch(
+            config.metadata.name.as_deref().unwrap_or("unknown"),
+            &PatchParams::apply("secret-manager-controller"),
+            &kube::api::Patch::Merge(patch),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Clear parsing error count from resource annotations
+    /// Called when parsing succeeds to reset the backoff for THIS resource
+    /// Each resource's error count is cleared independently
+    async fn clear_parsing_error_count(&self, config: &SecretManagerConfig) -> Result<()> {
+        use kube::api::PatchParams;
+
+        // Each resource is patched individually, so clearing is per-resource
+        let api: kube::Api<SecretManagerConfig> = kube::Api::namespaced(
+            self.client.clone(),
+            config.metadata.namespace.as_deref().unwrap_or("default"),
+        );
+
+        // Only clear if annotation exists for THIS resource
+        if let Some(ann) = &config.metadata.annotations {
+            if ann.contains_key("secret-management.microscaler.io/duration-parsing-errors") {
+                let patch = serde_json::json!({
+                    "metadata": {
+                        "annotations": {
+                            "secret-management.microscaler.io/duration-parsing-errors": null
+                        }
+                    }
+                });
+
+                // Clear annotation for THIS specific resource only
+                // Other resources' error counts remain unchanged
+                api.patch(
+                    config.metadata.name.as_deref().unwrap_or("unknown"),
+                    &PatchParams::apply("secret-manager-controller"),
+                    &kube::api::Patch::Merge(patch),
+                )
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Clear manual trigger annotation after reconciliation completes
+    /// This prevents the annotation from triggering repeated reconciliations
+    /// Called after successful reconciliation when manual trigger was detected
+    async fn clear_manual_trigger_annotation(&self, config: &SecretManagerConfig) -> Result<()> {
         use kube::api::PatchParams;
 
         let api: kube::Api<SecretManagerConfig> = kube::Api::namespaced(
             self.client.clone(),
             config.metadata.namespace.as_deref().unwrap_or("default"),
         );
+
+        // Only clear if annotation exists
+        if let Some(ann) = &config.metadata.annotations {
+            if ann.contains_key("secret-management.microscaler.io/reconcile") {
+                let patch = serde_json::json!({
+                    "metadata": {
+                        "annotations": {
+                            "secret-management.microscaler.io/reconcile": null
+                        }
+                    }
+                });
+
+                api.patch(
+                    config.metadata.name.as_deref().unwrap_or("unknown"),
+                    &PatchParams::apply("secret-manager-controller"),
+                    &kube::api::Patch::Merge(patch),
+                )
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Suspend or resume GitRepository pulls
+    /// Patches the FluxCD GitRepository resource to control Git pulls independently from reconciliation
+    /// When suspended, FluxCD stops fetching new commits but the last artifact remains available
+    async fn suspend_git_repository(&self, source_ref: &SourceRef, suspend: bool) -> Result<()> {
+        use kube::api::{ApiResource, Patch, PatchParams};
+        use kube::core::DynamicObject;
+
+        let ar = ApiResource::from_gvk(&kube::core::GroupVersionKind {
+            group: "source.toolkit.fluxcd.io".to_string(),
+            version: "v1beta2".to_string(),
+            kind: "GitRepository".to_string(),
+        });
+
+        let api: kube::Api<DynamicObject> =
+            kube::Api::namespaced_with(self.client.clone(), &source_ref.namespace, &ar);
+
+        // Check current suspend status
+        let git_repo = api.get(&source_ref.name).await.context(format!(
+            "Failed to get GitRepository: {}/{}",
+            source_ref.namespace, source_ref.name
+        ))?;
+
+        let current_suspend = git_repo
+            .data
+            .get("spec")
+            .and_then(|s| s.get("suspend"))
+            .and_then(|s| s.as_bool())
+            .unwrap_or(false);
+
+        // Only patch if status needs to change
+        if current_suspend == suspend {
+            debug!(
+                "GitRepository {}/{} already {}",
+                source_ref.namespace,
+                source_ref.name,
+                if suspend { "suspended" } else { "active" }
+            );
+            return Ok(());
+        }
+
+        // Patch GitRepository to set suspend status
+        let patch = serde_json::json!({
+            "spec": {
+                "suspend": suspend
+            }
+        });
+
+        let patch_params = PatchParams::apply("secret-manager-controller").force();
+
+        api.patch(&source_ref.name, &patch_params, &Patch::Merge(patch))
+            .await
+            .context(format!(
+                "Failed to {} GitRepository: {}/{}",
+                if suspend { "suspend" } else { "resume" },
+                source_ref.namespace,
+                source_ref.name
+            ))?;
+
+        info!(
+            "✅ GitRepository {}/{} {}",
+            source_ref.namespace,
+            source_ref.name,
+            if suspend {
+                "suspended (pulls paused, using last commit)"
+            } else {
+                "resumed (pulls enabled)"
+            }
+        );
+
+        Ok(())
+    }
+
+    async fn update_status(&self, config: &SecretManagerConfig, secrets_synced: i32) -> Result<()> {
+        use kube::api::PatchParams;
 
         // Determine what was synced for the description
         let is_configs_enabled = config
@@ -1346,10 +1874,29 @@ impl Reconciler {
             .map(|c| c.enabled)
             .unwrap_or(false);
         let description = if is_configs_enabled {
-            format!("Synced {} properties to config store", secrets_synced)
+            format!("Synced {secrets_synced} properties to config store")
         } else {
-            format!("Synced {} secrets to secret store", secrets_synced)
+            format!("Synced {secrets_synced} secrets to secret store")
         };
+
+        // CRITICAL: Check if status actually changed before updating
+        // This prevents unnecessary status updates that trigger watch events
+        let current_phase = config.status.as_ref().and_then(|s| s.phase.as_deref());
+        let current_secrets_synced = config.status.as_ref().and_then(|s| s.secrets_synced);
+
+        // Only update if phase changed (not Ready) or secrets_synced count changed
+        if current_phase == Some("Ready") && current_secrets_synced == Some(secrets_synced) {
+            debug!(
+                "Skipping status update - already Ready with same secrets_synced count: {}",
+                secrets_synced
+            );
+            return Ok(());
+        }
+
+        let api: kube::Api<SecretManagerConfig> = kube::Api::namespaced(
+            self.client.clone(),
+            config.metadata.namespace.as_deref().unwrap_or("default"),
+        );
 
         let status = SecretManagerConfigStatus {
             phase: Some("Ready".to_string()),
@@ -1363,6 +1910,17 @@ impl Reconciler {
             }],
             observed_generation: config.metadata.generation,
             last_reconcile_time: Some(chrono::Utc::now().to_rfc3339()),
+            next_reconcile_time: Self::parse_kubernetes_duration(&config.spec.reconcile_interval)
+                .ok()
+                .map(|duration| {
+                    chrono::Utc::now()
+                        .checked_add_signed(
+                            chrono::Duration::from_std(duration)
+                                .unwrap_or(chrono::Duration::zero()),
+                        )
+                        .map(|dt| dt.to_rfc3339())
+                })
+                .flatten(),
             secrets_synced: Some(secrets_synced),
         };
 
@@ -1389,40 +1947,34 @@ impl Reconciler {
     /// * `field_name` - Name of the field for error messages
     /// * `min_seconds` - Minimum allowed duration in seconds
     ///
-    /// # Returns
-    /// * `Ok(())` if valid
-    /// * `Err` with descriptive error message if invalid
-    fn validate_duration_interval(
-        interval: &str,
-        field_name: &str,
-        min_seconds: u64,
-    ) -> Result<()> {
-        use regex::Regex;
+    /// Parse Kubernetes duration string into std::time::Duration
+    /// Supports formats: "30s", "1m", "5m", "1h", "2h", "1d"
+    /// Returns Duration or error if format is invalid
+    pub fn parse_kubernetes_duration(duration_str: &str) -> Result<std::time::Duration> {
+        let duration_trimmed = duration_str.trim();
 
-        // Trim whitespace
-        let interval_trimmed = interval.trim();
-
-        if interval_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+        if duration_trimmed.is_empty() {
+            return Err(anyhow::anyhow!("Duration string cannot be empty"));
         }
 
         // Regex pattern for Kubernetes duration format
         // Matches: <number><unit> where:
         //   - number: one or more digits
         //   - unit: s, m, h, d (case insensitive)
-        // Examples: "1m", "5m", "1h", "30m", "2h", "1d"
-        // Does NOT match: "30s" (if min_seconds >= 60), "abc", "1", "m", etc.
         let duration_regex = Regex::new(r"^(?P<number>\d+)(?P<unit>[smhd])$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         // Match against trimmed, lowercase version
-        let interval_lower = interval_trimmed.to_lowercase();
+        let interval_lower = duration_trimmed.to_lowercase();
 
-        let captures = duration_regex.captures(&interval_lower)
-            .ok_or_else(|| anyhow::anyhow!(
-                "Invalid duration format '{}': must match pattern <number><unit> where unit is s, m, h, or d (e.g., '1m', '5m', '1h')",
-                interval_trimmed
-            ))?;
+        let captures = duration_regex
+            .captures(&interval_lower)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Invalid duration format '{}'. Expected format: <number><unit> (e.g., '1m', '5m', '1h')",
+                    duration_trimmed
+                )
+            })?;
 
         // Extract number and unit from regex captures
         let number_str = captures
@@ -1430,7 +1982,7 @@ impl Reconciler {
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "Failed to extract number from duration '{}'",
-                    interval_trimmed
+                    duration_trimmed
                 )
             })?
             .as_str();
@@ -1440,7 +1992,7 @@ impl Reconciler {
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "Failed to extract unit from duration '{}'",
-                    interval_trimmed
+                    duration_trimmed
                 )
             })?
             .as_str();
@@ -1450,7 +2002,7 @@ impl Reconciler {
             anyhow::anyhow!(
                 "Invalid duration number '{}' in '{}': {}",
                 number_str,
-                interval_trimmed,
+                duration_trimmed,
                 e
             )
         })?;
@@ -1458,7 +2010,7 @@ impl Reconciler {
         if number == 0 {
             return Err(anyhow::anyhow!(
                 "Duration number must be greater than 0, got '{}'",
-                interval_trimmed
+                duration_trimmed
             ));
         }
 
@@ -1469,28 +2021,46 @@ impl Reconciler {
             "h" => number * 3600,
             "d" => number * 86400,
             _ => {
-                // This should never happen due to regex, but handle it safely
                 return Err(anyhow::anyhow!(
-                    "Invalid duration unit '{}' in '{}': expected s, m, h, or d",
+                    "Invalid unit '{}' in duration '{}'. Expected: s, m, h, or d",
                     unit,
-                    interval_trimmed
+                    duration_trimmed
                 ));
             }
         };
 
-        // Enforce minimum
-        if seconds < min_seconds {
+        Ok(std::time::Duration::from_secs(seconds))
+    }
+
+    /// # Returns
+    /// * `Ok(())` if valid
+    /// * `Err` with descriptive error message if invalid
+    fn validate_duration_interval(
+        interval: &str,
+        field_name: &str,
+        min_seconds: u64,
+    ) -> Result<()> {
+        // Trim whitespace
+        let interval_trimmed = interval.trim();
+
+        if interval_trimmed.is_empty() {
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
+        }
+
+        // Parse the duration to validate format
+        let duration = Self::parse_kubernetes_duration(interval_trimmed)?;
+
+        // Check minimum duration
+        if duration.as_secs() < min_seconds {
             let min_duration = if min_seconds == 60 {
                 "1 minute (60 seconds)"
             } else {
-                &format!("{} seconds", min_seconds)
+                &format!("{min_seconds} seconds")
             };
             return Err(anyhow::anyhow!(
-                "{} must be at least {} to avoid API rate limits. Got: '{}' ({} seconds)",
-                field_name,
-                min_duration,
+                "{field_name} must be at least {min_duration} to avoid API rate limits. Got: '{}' ({} seconds)",
                 interval_trimmed,
-                seconds
+                duration.as_secs()
             ));
         }
 
@@ -1561,11 +2131,7 @@ impl Reconciler {
         if let Some(ref prefix) = config.spec.secrets.prefix {
             if !prefix.is_empty() {
                 if let Err(e) = Self::validate_secret_name_component(prefix, "secrets.prefix") {
-                    return Err(anyhow::anyhow!(
-                        "Invalid secrets.prefix '{}': {}",
-                        prefix,
-                        e
-                    ));
+                    return Err(anyhow::anyhow!("Invalid secrets.prefix '{prefix}': {e}"));
                 }
             }
         }
@@ -1573,11 +2139,7 @@ impl Reconciler {
         if let Some(ref suffix) = config.spec.secrets.suffix {
             if !suffix.is_empty() {
                 if let Err(e) = Self::validate_secret_name_component(suffix, "secrets.suffix") {
-                    return Err(anyhow::anyhow!(
-                        "Invalid secrets.suffix '{}': {}",
-                        suffix,
-                        e
-                    ));
+                    return Err(anyhow::anyhow!("Invalid secrets.suffix '{suffix}': {e}"));
                 }
             }
         }
@@ -1586,9 +2148,7 @@ impl Reconciler {
             if !base_path.is_empty() {
                 if let Err(e) = Self::validate_path(base_path, "secrets.basePath") {
                     return Err(anyhow::anyhow!(
-                        "Invalid secrets.basePath '{}': {}",
-                        base_path,
-                        e
+                        "Invalid secrets.basePath '{base_path}': {e}"
                     ));
                 }
             }
@@ -1598,9 +2158,7 @@ impl Reconciler {
             if !kustomize_path.is_empty() {
                 if let Err(e) = Self::validate_path(kustomize_path, "secrets.kustomizePath") {
                     return Err(anyhow::anyhow!(
-                        "Invalid secrets.kustomizePath '{}': {}",
-                        kustomize_path,
-                        e
+                        "Invalid secrets.kustomizePath '{kustomize_path}': {e}"
                     ));
                 }
             }
@@ -1608,13 +2166,13 @@ impl Reconciler {
 
         // Validate provider configuration
         if let Err(e) = Self::validate_provider_config(&config.spec.provider) {
-            return Err(anyhow::anyhow!("Invalid provider configuration: {}", e));
+            return Err(anyhow::anyhow!("Invalid provider configuration: {e}"));
         }
 
         // Validate configs configuration if present
         if let Some(ref configs) = config.spec.configs {
             if let Err(e) = Self::validate_configs_config(configs) {
-                return Err(anyhow::anyhow!("Invalid configs configuration: {}", e));
+                return Err(anyhow::anyhow!("Invalid configs configuration: {e}"));
             }
         }
 
@@ -1631,8 +2189,7 @@ impl Reconciler {
         match kind_trimmed {
             "GitRepository" | "Application" => Ok(()),
             _ => Err(anyhow::anyhow!(
-                "Must be 'GitRepository' or 'Application' (case-sensitive), got '{}'",
-                kind_trimmed
+                "Must be 'GitRepository' or 'Application' (case-sensitive), got '{kind_trimmed}'"
             )),
         }
     }
@@ -1645,7 +2202,7 @@ impl Reconciler {
         let name_trimmed = name.trim();
 
         if name_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         if name_trimmed.len() > 253 {
@@ -1661,13 +2218,11 @@ impl Reconciler {
         // Simplified: lowercase alphanumeric, hyphens, dots; cannot start/end with hyphen or dot
         let name_regex =
             Regex::new(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
-                .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if !name_regex.is_match(name_trimmed) {
             return Err(anyhow::anyhow!(
-                "{} '{}' must be a valid Kubernetes name (lowercase alphanumeric, hyphens, dots; cannot start/end with hyphen or dot)",
-                field_name,
-                name_trimmed
+                "{field_name} '{name_trimmed}' must be a valid Kubernetes name (lowercase alphanumeric, hyphens, dots; cannot start/end with hyphen or dot)"
             ));
         }
 
@@ -1695,12 +2250,11 @@ impl Reconciler {
 
         // RFC 1123 label: [a-z0-9]([-a-z0-9]*[a-z0-9])?
         let namespace_regex = Regex::new(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if !namespace_regex.is_match(namespace_trimmed) {
             return Err(anyhow::anyhow!(
-                "sourceRef.namespace '{}' must be a valid Kubernetes namespace (lowercase alphanumeric, hyphens; cannot start/end with hyphen)",
-                namespace_trimmed
+                "sourceRef.namespace '{namespace_trimmed}' must be a valid Kubernetes namespace (lowercase alphanumeric, hyphens; cannot start/end with hyphen)"
             ));
         }
 
@@ -1715,7 +2269,7 @@ impl Reconciler {
         let label_trimmed = label.trim();
 
         if label_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         if label_trimmed.len() > 63 {
@@ -1729,13 +2283,11 @@ impl Reconciler {
 
         // Kubernetes label: [a-z0-9]([-a-z0-9_.]*[a-z0-9])?
         let label_regex = Regex::new(r"^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if !label_regex.is_match(label_trimmed) {
             return Err(anyhow::anyhow!(
-                "{} '{}' must be a valid Kubernetes label (lowercase alphanumeric, hyphens, dots, underscores; cannot start/end with dot)",
-                field_name,
-                label_trimmed
+                "{field_name} '{label_trimmed}' must be a valid Kubernetes label (lowercase alphanumeric, hyphens, dots, underscores; cannot start/end with dot)"
             ));
         }
 
@@ -1750,7 +2302,7 @@ impl Reconciler {
         let component_trimmed = component.trim();
 
         if component_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         if component_trimmed.len() > 255 {
@@ -1764,13 +2316,11 @@ impl Reconciler {
 
         // Secret name component: alphanumeric, hyphens, underscores
         let secret_regex = Regex::new(r"^[a-zA-Z0-9_-]+$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if !secret_regex.is_match(component_trimmed) {
             return Err(anyhow::anyhow!(
-                "{} '{}' must contain only alphanumeric characters, hyphens, and underscores",
-                field_name,
-                component_trimmed
+                "{field_name} '{component_trimmed}' must contain only alphanumeric characters, hyphens, and underscores"
             ));
         }
 
@@ -1784,15 +2334,13 @@ impl Reconciler {
         let path_trimmed = path.trim();
 
         if path_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         // Check for null bytes
         if path_trimmed.contains('\0') {
             return Err(anyhow::anyhow!(
-                "{} '{}' cannot contain null bytes",
-                field_name,
-                path_trimmed
+                "{field_name} '{path_trimmed}' cannot contain null bytes"
             ));
         }
 
@@ -1814,9 +2362,7 @@ impl Reconciler {
         for ch in path_trimmed.chars() {
             if ch.is_control() {
                 return Err(anyhow::anyhow!(
-                    "{} '{}' contains control characters",
-                    field_name,
-                    path_trimmed
+                    "{field_name} '{path_trimmed}' contains control characters"
                 ));
             }
         }
@@ -1844,7 +2390,7 @@ impl Reconciler {
                 // - Allowed: lowercase letters, numbers, hyphens
                 // Reference: https://cloud.google.com/resource-manager/docs/creating-managing-projects
                 let project_id_regex = Regex::new(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
-                    .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+                    .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
                 if !project_id_regex.is_match(&gcp.project_id) {
                     return Err(anyhow::anyhow!(
@@ -1880,7 +2426,7 @@ impl Reconciler {
                 // - Hyphens cannot be consecutive
                 // Reference: https://learn.microsoft.com/en-us/azure/key-vault/general/about-keys-secrets-certificates#vault-name
                 let vault_name_regex = Regex::new(r"^[a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9]$")
-                    .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+                    .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
                 if !vault_name_regex.is_match(&azure.vault_name) {
                     return Err(anyhow::anyhow!(
@@ -1920,23 +2466,24 @@ impl Reconciler {
 
         // Standard region pattern: [a-z]{2}-[a-z]+-[0-9]+
         let standard_pattern = Regex::new(r"^[a-z]{2}-[a-z]+-\d+$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         // Gov region pattern: [a-z]{2}-gov-[a-z]+-[0-9]+
         let gov_pattern = Regex::new(r"^[a-z]{2}-gov-[a-z]+-\d+$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         // ISO region pattern: [a-z]{2}-iso-[a-z]+-[0-9]+
         let iso_pattern = Regex::new(r"^[a-z]{2}-iso-[a-z]+-\d+$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         // China region pattern: cn-[a-z]+-[0-9]+
         let china_pattern = Regex::new(r"^cn-[a-z]+-\d+$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
-        // Local pattern (for localstack/testing)
-        let local_pattern = Regex::new(r"^local$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+        // Local pattern (for local development/testing with localstack)
+        // Note: This allows "local" as a region for local development environments
+        let local_pattern =
+            Regex::new(r"^local$").map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if standard_pattern.is_match(&region_trimmed)
             || gov_pattern.is_match(&region_trimmed)
@@ -1947,8 +2494,7 @@ impl Reconciler {
             Ok(())
         } else {
             Err(anyhow::anyhow!(
-                "provider.aws.region '{}' must be a valid AWS region code (e.g., 'us-east-1', 'eu-west-1', 'us-gov-west-1', 'cn-north-1'). See: https://docs.aws.amazon.com/general/latest/gr/rande.html",
-                region
+                "provider.aws.region '{region}' must be a valid AWS region code (e.g., 'us-east-1', 'eu-west-1', 'us-gov-west-1', 'cn-north-1'). See: https://docs.aws.amazon.com/general/latest/gr/rande.html"
             ))
         }
     }
@@ -1968,9 +2514,7 @@ impl Reconciler {
             if !endpoint.is_empty() {
                 if let Err(e) = Self::validate_url(endpoint, "configs.appConfigEndpoint") {
                     return Err(anyhow::anyhow!(
-                        "Invalid configs.appConfigEndpoint '{}': {}",
-                        endpoint,
-                        e
+                        "Invalid configs.appConfigEndpoint '{endpoint}': {e}"
                     ));
                 }
             }
@@ -1981,9 +2525,7 @@ impl Reconciler {
             if !path.is_empty() {
                 if let Err(e) = Self::validate_aws_parameter_path(path, "configs.parameterPath") {
                     return Err(anyhow::anyhow!(
-                        "Invalid configs.parameterPath '{}': {}",
-                        path,
-                        e
+                        "Invalid configs.parameterPath '{path}': {e}"
                     ));
                 }
             }
@@ -1997,18 +2539,16 @@ impl Reconciler {
         let url_trimmed = url.trim();
 
         if url_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         // Basic URL validation: must start with http:// or https://
         let url_regex = Regex::new(r"^https?://[^\s/$.?#].[^\s]*$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if !url_regex.is_match(url_trimmed) {
             return Err(anyhow::anyhow!(
-                "{} '{}' must be a valid URL starting with http:// or https://",
-                field_name,
-                url_trimmed
+                "{field_name} '{url_trimmed}' must be a valid URL starting with http:// or https://"
             ));
         }
 
@@ -2021,26 +2561,22 @@ impl Reconciler {
         let path_trimmed = path.trim();
 
         if path_trimmed.is_empty() {
-            return Err(anyhow::anyhow!("{} cannot be empty", field_name));
+            return Err(anyhow::anyhow!("{field_name} cannot be empty"));
         }
 
         if !path_trimmed.starts_with('/') {
             return Err(anyhow::anyhow!(
-                "{} '{}' must start with '/' (e.g., '/my-service/dev')",
-                field_name,
-                path_trimmed
+                "{field_name} '{path_trimmed}' must start with '/' (e.g., '/my-service/dev')"
             ));
         }
 
         // AWS Parameter Store path: /[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)*
         let param_path_regex = Regex::new(r"^/[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)*$")
-            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
         if !param_path_regex.is_match(path_trimmed) {
             return Err(anyhow::anyhow!(
-                "{} '{}' must be a valid AWS Parameter Store path (e.g., '/my-service/dev')",
-                field_name,
-                path_trimmed
+                "{field_name} '{path_trimmed}' must be a valid AWS Parameter Store path (e.g., '/my-service/dev')"
             ));
         }
 

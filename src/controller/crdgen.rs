@@ -80,6 +80,20 @@ pub struct SecretManagerConfigSpec {
     /// Default: true (enabled)
     #[serde(default = "default_true")]
     pub trigger_update: bool,
+    /// Suspend reconciliation
+    /// When true, the controller will skip reconciliation for this resource
+    /// Useful for troubleshooting or during intricate CI/CD transitions where secrets need to be carefully managed
+    /// Manual reconciliation via msmctl will also be blocked when suspended
+    /// Default: false (reconciliation enabled)
+    #[serde(default = "default_false")]
+    pub suspend: bool,
+    /// Suspend GitRepository pulls
+    /// When true, suspends Git pulls from the referenced GitRepository but continues reconciliation with the last pulled commit
+    /// This is useful when you want to freeze the Git state but keep syncing secrets from the current commit
+    /// The controller will automatically patch the GitRepository resource to set suspend: true/false
+    /// Default: false (Git pulls enabled)
+    #[serde(default = "default_false")]
+    pub suspend_git_pulls: bool,
 }
 
 /// Cloud provider configuration
@@ -321,6 +335,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SecretManagerConfigStatus {
@@ -338,6 +356,10 @@ pub struct SecretManagerConfigStatus {
     pub observed_generation: Option<i64>,
     #[serde(default)]
     pub last_reconcile_time: Option<String>,
+    /// Next scheduled reconciliation time (RFC3339)
+    /// Used to persist periodic reconciliation schedule across watch restarts
+    #[serde(default)]
+    pub next_reconcile_time: Option<String>,
     #[serde(default)]
     pub secrets_synced: Option<i32>,
 }
@@ -355,6 +377,9 @@ pub struct Condition {
     pub message: Option<String>,
 }
 
+// main() is only flagged as unused when checking the library target,
+// but it's the entry point for the crdgen binary
+#[allow(dead_code, reason = "main() is the entry point for the crdgen binary")]
 fn main() {
     // Generate CRD YAML
     let crd = SecretManagerConfig::crd();

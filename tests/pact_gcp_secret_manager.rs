@@ -18,7 +18,7 @@ async fn make_request(
         "POST" => client.post(url),
         "PATCH" => client.patch(url),
         "DELETE" => client.delete(url),
-        _ => panic!("Unsupported HTTP method: {}", method),
+        _ => panic!("Unsupported HTTP method: {method}"),
     };
 
     request = request
@@ -69,7 +69,7 @@ async fn test_gcp_create_secret_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!("{}/v1/projects/test-project/secrets", base_url);
+    let mock_url = format!("{base_url}/v1/projects/test-project/secrets");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -132,10 +132,8 @@ async fn test_gcp_add_secret_version_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!(
-        "{}/v1/projects/test-project/secrets/test-secret-name:addVersion",
-        base_url
-    );
+    let mock_url =
+        format!("{base_url}/v1/projects/test-project/secrets/test-secret-name:addVersion");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -191,10 +189,8 @@ async fn test_gcp_get_secret_version_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!(
-        "{}/v1/projects/test-project/secrets/test-secret-name/versions/latest",
-        base_url
-    );
+    let mock_url =
+        format!("{base_url}/v1/projects/test-project/secrets/test-secret-name/versions/latest");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -242,10 +238,8 @@ async fn test_gcp_secret_not_found_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!(
-        "{}/v1/projects/test-project/secrets/non-existent-secret/versions/latest",
-        base_url
-    );
+    let mock_url =
+        format!("{base_url}/v1/projects/test-project/secrets/non-existent-secret/versions/latest");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -298,7 +292,7 @@ async fn test_gcp_list_secrets_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/v1/projects/test-project/secrets", base_url);
+    let mock_url = format!("{base_url}/v1/projects/test-project/secrets");
 
     let client = reqwest::Client::new();
     let response = make_request(&client, "GET", &mock_url, None)
@@ -347,10 +341,7 @@ async fn test_gcp_list_secret_versions_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!(
-        "{}/v1/projects/test-project/secrets/test-secret-name/versions",
-        base_url
-    );
+    let mock_url = format!("{base_url}/v1/projects/test-project/secrets/test-secret-name/versions");
 
     let client = reqwest::Client::new();
     let response = make_request(&client, "GET", &mock_url, None)
@@ -385,10 +376,7 @@ async fn test_gcp_delete_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!(
-        "{}/v1/projects/test-project/secrets/test-secret-name",
-        base_url
-    );
+    let mock_url = format!("{base_url}/v1/projects/test-project/secrets/test-secret-name");
 
     let client = reqwest::Client::new();
     let response = make_request(&client, "DELETE", &mock_url, None)
@@ -427,10 +415,8 @@ async fn test_gcp_disable_secret_version_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!(
-        "{}/v1/projects/test-project/secrets/test-secret-name/versions/1:disable",
-        base_url
-    );
+    let mock_url =
+        format!("{base_url}/v1/projects/test-project/secrets/test-secret-name/versions/1:disable");
 
     let client = reqwest::Client::new();
     let response = make_request(&client, "POST", &mock_url, Some(json!({})))
@@ -471,10 +457,8 @@ async fn test_gcp_enable_secret_version_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!(
-        "{}/v1/projects/test-project/secrets/test-secret-name/versions/1:enable",
-        base_url
-    );
+    let mock_url =
+        format!("{base_url}/v1/projects/test-project/secrets/test-secret-name/versions/1:enable");
 
     let client = reqwest::Client::new();
     let response = make_request(&client, "POST", &mock_url, Some(json!({})))
@@ -516,10 +500,8 @@ async fn test_gcp_destroy_secret_version_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!(
-        "{}/v1/projects/test-project/secrets/test-secret-name/versions/1:destroy",
-        base_url
-    );
+    let mock_url =
+        format!("{base_url}/v1/projects/test-project/secrets/test-secret-name/versions/1:destroy");
 
     let client = reqwest::Client::new();
     let response = make_request(&client, "POST", &mock_url, Some(json!({})))
@@ -562,10 +544,7 @@ async fn test_gcp_get_secret_metadata_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!(
-        "{}/v1/projects/test-project/secrets/test-secret-name",
-        base_url
-    );
+    let mock_url = format!("{base_url}/v1/projects/test-project/secrets/test-secret-name");
 
     let client = reqwest::Client::new();
     let response = make_request(&client, "GET", &mock_url, None)
@@ -623,10 +602,7 @@ async fn test_gcp_patch_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!(
-        "{}/v1/projects/test-project/secrets/test-secret-name",
-        base_url
-    );
+    let mock_url = format!("{base_url}/v1/projects/test-project/secrets/test-secret-name");
 
     let client = reqwest::Client::new();
     let response = make_request(

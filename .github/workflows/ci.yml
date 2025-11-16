@@ -15,7 +15,6 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   TTL_REGISTRY: ttl.sh
-  TTL_IMAGE_NAME: ${{ github.repository }}-${GITHUB_SHA::8}
 
 jobs:
   # Step 1: Run linting checks
@@ -109,9 +108,8 @@ jobs:
         run: |
           # Build native target (for faster unit tests)
           cargo build --all-targets --all-features
-          # Build musl target using host-aware-build.sh (tests cross-compilation)
-          chmod +x scripts/host-aware-build.sh
-          ./scripts/host-aware-build.sh --all-features
+          # Build musl target using host_aware_build.py (tests cross-compilation)
+          python3 scripts/host_aware_build.py --all-features
 
       - name: Run unit tests
         run: |
@@ -133,11 +131,97 @@ jobs:
             exit 1
           fi
 
+  # Step 2.5: Generate code coverage report
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # Fetch all history for accurate coverage diff
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-secret-manager-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-secret-manager-
+
+      - name: Run tests with coverage
+        run: |
+          cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info --tests
+
+      - name: Generate coverage summary
+        run: |
+          echo "## 📊 Code Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cargo llvm-cov --all-features --workspace --summary-only --output-format markdown >> $GITHUB_STEP_SUMMARY || true
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📈 Coverage artifacts available for download below" >> $GITHUB_STEP_SUMMARY
+
+      - name: Generate HTML coverage report
+        run: |
+          cargo llvm-cov --all-features --workspace --html --output-dir coverage-html --tests || true
+
+      - name: Upload LCOV coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          retention-days: 30
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-report
+          path: coverage-html/
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Generate PR coverage comment
+        if: github.event_name == 'pull_request'
+        run: |
+          mkdir -p coverage-comment
+          cargo llvm-cov --all-features --workspace --summary-only --output-format markdown > coverage-comment/coverage.md || true
+          echo "" >> coverage-comment/coverage.md
+          echo "📥 **Download Coverage Reports:**" >> coverage-comment/coverage.md
+          echo "- LCOV format: Available in workflow artifacts" >> coverage-comment/coverage.md
+          echo "- HTML report: Available in workflow artifacts" >> coverage-comment/coverage.md
+
+      - name: Comment PR with coverage summary
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          recreate: true
+          path: coverage-comment/coverage.md
+
   # Step 2: Build container and publish to ttl.sh (temporary registry)
   build-test-image:
     name: Build and Publish Test Image (ttl.sh)
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, coverage]
     permissions:
       contents: read
     outputs:
@@ -150,6 +234,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Set image tag
+        id: image
+        run: |
+          # Generate UUID for ttl.sh image name (as per ttl.sh documentation)
+          IMAGE_UUID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+          IMAGE_REF="${{ env.TTL_REGISTRY }}/${IMAGE_UUID}:1h"
+          echo "image_ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
+          echo "IMAGE_REF=${IMAGE_REF}" >> $GITHUB_ENV
+          echo "✅ Image reference: ${IMAGE_REF}"
+
       - name: Build and push to ttl.sh
         id: build
         uses: docker/build-push-action@v5
@@ -157,18 +251,14 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ env.TTL_REGISTRY }}/${{ env.TTL_IMAGE_NAME }}:1h
+          tags: ${{ steps.image.outputs.image_ref }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
-
-      - name: Output image reference
-        id: image
-        run: |
-          IMAGE_REF="${{ env.TTL_REGISTRY }}/${{ env.TTL_IMAGE_NAME }}:1h"
-          echo "image_ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
-          echo "IMAGE_REF=${IMAGE_REF}" >> $GITHUB_ENV
-          echo "✅ Built and pushed image: ${IMAGE_REF}"
+          build-args: |
+            BUILD_GIT_HASH=${{ github.sha }}
+            BUILD_TIMESTAMP=${{ github.run_id }}
+            BUILD_DATETIME=${{ github.event.head_commit.timestamp }}
 
   # Step 3: Run Pact tests in k3s cluster
   pact-tests:
@@ -365,8 +455,7 @@ jobs:
 
       - name: Build binaries
         run: |
-          chmod +x scripts/host-aware-build.sh
-          ./scripts/host-aware-build.sh --release --bins
+          python3 scripts/host_aware_build.py --release --bins
 
       - name: Upload binaries as artifacts
         uses: actions/upload-artifact@v4
