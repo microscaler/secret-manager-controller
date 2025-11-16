@@ -4,7 +4,12 @@
 
 # Stage 1: Build the Rust binary
 ARG BUILDPLATFORM=linux/amd64
-FROM --platform=$BUILDPLATFORM rust:1.75-bookworm AS builder
+FROM --platform=$BUILDPLATFORM rust:1.82-bookworm AS builder
+
+# Build arguments for build.rs
+ARG BUILD_GIT_HASH=unknown
+ARG BUILD_TIMESTAMP
+ARG BUILD_DATETIME
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -19,16 +24,23 @@ WORKDIR /build
 # Copy Cargo files first for better layer caching
 COPY Cargo.toml Cargo.lock ./
 
+# Copy build script (needed for build-time git hash)
+COPY build.rs ./
+
 # Copy source code
 COPY src ./src
 COPY config ./config
 
 # Build the binary in release mode
-RUN cargo build --release --bin secret-manager-controller
+# Pass build-time environment variables to build.rs
+# Use --locked to ensure Cargo.lock is respected and transitive dependencies resolve correctly
+RUN BUILD_GIT_HASH=${BUILD_GIT_HASH} \
+    BUILD_TIMESTAMP=${BUILD_TIMESTAMP} \
+    BUILD_DATETIME=${BUILD_DATETIME} \
+    cargo build --release --locked --bin secret-manager-controller
 
 # Stage 2: Runtime image
-ARG TARGETPLATFORM=linux/amd64
-FROM --platform=${TARGETPLATFORM} debian:bookworm-slim
+FROM debian:bookworm-slim
 
 # Install runtime dependencies
 # git: Required for ArgoCD support (cloning repositories)

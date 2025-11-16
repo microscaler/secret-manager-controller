@@ -11,7 +11,7 @@ metadata:
     app.kubernetes.io/component: pact-broker
     app.kubernetes.io/part-of: secret-manager-controller
 spec:
-  replicas: 1
+  replicas: 
   selector:
     matchLabels:
       app: pact-broker
@@ -53,18 +53,30 @@ spec:
           limits:
             memory: 256Mi
             cpu: 200m
+        startupProbe:
+          httpGet:
+            path: /diagnostic/status/heartbeat
+            port: 9292
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 5
         readinessProbe:
           httpGet:
-            path: /
+            path: /diagnostic/status/heartbeat
             port: 9292
-          initialDelaySeconds: 10
+          initialDelaySeconds: 15
           periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
         livenessProbe:
           httpGet:
-            path: /
+            path: /diagnostic/status/heartbeat
             port: 9292
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
       volumes:
       - name: pacts-storage
         emptyDir: {}  # Ephemeral storage for CI/testing

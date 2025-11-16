@@ -67,7 +67,7 @@ dependencies = [
  "i18n-embed",
  "i18n-embed-fl",
  "lazy_static",
- "nom",
+ "nom 7.1.3",
  "pin-project",
  "rand 0.8.5",
  "rust-embed",
@@ -89,7 +89,7 @@ dependencies = [
  "cookie-factory",
  "hkdf",
  "io_tee",
- "nom",
+ "nom 7.1.3",
  "rand 0.8.5",
  "secrecy",
  "sha2",
@@ -740,9 +740,9 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.8.6"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a18ed336352031311f4e0b4dd2ff392d4fbb370777c9d18d7fc9d7359f73871"
+checksum = "5b098575ebe77cb6d14fc7f32749631a6e44edbef6b796f89b020e99ba20d425"
 dependencies = [
  "axum-core",
  "bytes",
@@ -1052,6 +1052,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadence"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3075f133bee430b7644c54fb629b9b4420346ffa275a45c81a6babe8b09b4f51"
+dependencies = [
+ "crossbeam-channel",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1069,7 +1078,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6fac387a98bb7c37292057cffc56d62ecb629900026402633ae9160df93a8766"
 dependencies = [
- "nom",
+ "nom 7.1.3",
 ]
 
 [[package]]
@@ -1266,6 +1275,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
+name = "const_format"
+version = "0.2.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7faa7469a93a566e9ccc1c73fe783b4a65c274c5ace346038dca9c39fe0030ad"
+dependencies = [
+ "const_format_proc_macros",
+]
+
+[[package]]
+name = "const_format_proc_macros"
+version = "0.2.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d57c2eccfb16dbac1f4e61e206105db5820c9d26c3c472bc17c774259ef7744"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-xid",
+]
+
+[[package]]
 name = "constant_time_eq"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1337,6 +1366,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "crossbeam-channel"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
+dependencies = [
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -1459,6 +1497,235 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-pipeline"
+version = "21.0.0"
+source = "git+https://github.com/Datadog/libdatadog?rev=f9ac67036ce7391903706fbb433fc5feec19eb95#f9ac67036ce7391903706fbb433fc5feec19eb95"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "bytes",
+ "datadog-ddsketch",
+ "datadog-trace-protobuf",
+ "datadog-trace-stats",
+ "datadog-trace-utils",
+ "ddcommon",
+ "ddtelemetry",
+ "dogstatsd-client",
+ "either",
+ "http 1.3.1",
+ "http-body-util",
+ "hyper 1.8.1",
+ "hyper-util",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tinybytes",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "datadog-ddsketch"
+version = "21.0.0"
+source = "git+https://github.com/Datadog/libdatadog?rev=f9ac67036ce7391903706fbb433fc5feec19eb95#f9ac67036ce7391903706fbb433fc5feec19eb95"
+dependencies = [
+ "prost",
+]
+
+[[package]]
+name = "datadog-opentelemetry"
+version = "0.0.1"
+source = "git+https://github.com/DataDog/dd-trace-rs#7ec9bcdfcb528b863dd82bd3d5eb6196acbd87f3"
+dependencies = [
+ "data-pipeline",
+ "datadog-opentelemetry-mappings",
+ "datadog-trace-utils",
+ "dd-trace",
+ "dd-trace-propagation",
+ "dd-trace-sampling",
+ "foldhash",
+ "futures",
+ "hashbrown 0.15.5",
+ "opentelemetry 0.31.0",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk 0.31.0",
+ "rand 0.8.5",
+ "serde_json",
+]
+
+[[package]]
+name = "datadog-opentelemetry-mappings"
+version = "0.0.1"
+source = "git+https://github.com/DataDog/dd-trace-rs#7ec9bcdfcb528b863dd82bd3d5eb6196acbd87f3"
+dependencies = [
+ "datadog-trace-utils",
+ "dd-trace",
+ "opentelemetry 0.31.0",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk 0.31.0",
+ "serde",
+]
+
+[[package]]
+name = "datadog-trace-normalization"
+version = "21.0.0"
+source = "git+https://github.com/Datadog/libdatadog?rev=f9ac67036ce7391903706fbb433fc5feec19eb95#f9ac67036ce7391903706fbb433fc5feec19eb95"
+dependencies = [
+ "anyhow",
+ "datadog-trace-protobuf",
+]
+
+[[package]]
+name = "datadog-trace-protobuf"
+version = "21.0.0"
+source = "git+https://github.com/Datadog/libdatadog?rev=f9ac67036ce7391903706fbb433fc5feec19eb95#f9ac67036ce7391903706fbb433fc5feec19eb95"
+dependencies = [
+ "prost",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
+name = "datadog-trace-stats"
+version = "21.0.0"
+source = "git+https://github.com/Datadog/libdatadog?rev=f9ac67036ce7391903706fbb433fc5feec19eb95#f9ac67036ce7391903706fbb433fc5feec19eb95"
+dependencies = [
+ "datadog-ddsketch",
+ "datadog-trace-protobuf",
+ "datadog-trace-utils",
+ "hashbrown 0.15.5",
+]
+
+[[package]]
+name = "datadog-trace-utils"
+version = "21.0.0"
+source = "git+https://github.com/Datadog/libdatadog?rev=f9ac67036ce7391903706fbb433fc5feec19eb95#f9ac67036ce7391903706fbb433fc5feec19eb95"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "datadog-trace-normalization",
+ "datadog-trace-protobuf",
+ "ddcommon",
+ "futures",
+ "http-body-util",
+ "hyper 1.8.1",
+ "prost",
+ "rand 0.8.5",
+ "rmp",
+ "rmp-serde",
+ "rmpv",
+ "serde",
+ "serde_json",
+ "tinybytes",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "dd-trace"
+version = "0.0.1"
+source = "git+https://github.com/DataDog/dd-trace-rs#7ec9bcdfcb528b863dd82bd3d5eb6196acbd87f3"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "base64 0.21.7",
+ "ddcommon",
+ "ddtelemetry",
+ "http-body-util",
+ "hyper 1.8.1",
+ "hyper-util",
+ "rustc_version_runtime",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "dd-trace-propagation"
+version = "0.0.1"
+source = "git+https://github.com/DataDog/dd-trace-rs#7ec9bcdfcb528b863dd82bd3d5eb6196acbd87f3"
+dependencies = [
+ "dd-trace",
+ "opentelemetry 0.31.0",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dd-trace-sampling"
+version = "0.0.1"
+source = "git+https://github.com/DataDog/dd-trace-rs#7ec9bcdfcb528b863dd82bd3d5eb6196acbd87f3"
+dependencies = [
+ "datadog-opentelemetry-mappings",
+ "dd-trace",
+ "lru",
+ "opentelemetry 0.31.0",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk 0.31.0",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ddcommon"
+version = "21.0.0"
+source = "git+https://github.com/Datadog/libdatadog?rev=f9ac67036ce7391903706fbb433fc5feec19eb95#f9ac67036ce7391903706fbb433fc5feec19eb95"
+dependencies = [
+ "anyhow",
+ "cc",
+ "const_format",
+ "futures",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "http 1.3.1",
+ "http-body 1.0.1",
+ "http-body-util",
+ "hyper 1.8.1",
+ "hyper-util",
+ "libc",
+ "nix 0.29.0",
+ "pin-project",
+ "regex",
+ "serde",
+ "static_assertions",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower-service",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "ddtelemetry"
+version = "21.0.0"
+source = "git+https://github.com/Datadog/libdatadog?rev=f9ac67036ce7391903706fbb433fc5feec19eb95#f9ac67036ce7391903706fbb433fc5feec19eb95"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "datadog-ddsketch",
+ "ddcommon",
+ "futures",
+ "hashbrown 0.15.5",
+ "http 1.3.1",
+ "http-body-util",
+ "hyper 1.8.1",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "sys-info",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "deflate64"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1578,10 +1845,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "dogstatsd-client"
+version = "21.0.0"
+source = "git+https://github.com/Datadog/libdatadog?rev=f9ac67036ce7391903706fbb433fc5feec19eb95#f9ac67036ce7391903706fbb433fc5feec19eb95"
+dependencies = [
+ "anyhow",
+ "cadence",
+ "ddcommon",
+ "http 1.3.1",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "dotenv"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
+
+[[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "dunce"
@@ -2078,7 +2364,7 @@ dependencies = [
 [[package]]
 name = "google-cloud-auth"
 version = "1.1.1"
-source = "git+https://github.com/microscaler/google-cloud-rust?branch=fix%2Fopenssl-tls-issue#601d718f825eefc83358a5392fb769181190b2d2"
+source = "git+https://github.com/microscaler/google-cloud-rust?rev=601d718f825eefc83358a5392fb769181190b2d2#601d718f825eefc83358a5392fb769181190b2d2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2100,7 +2386,7 @@ dependencies = [
 [[package]]
 name = "google-cloud-gax"
 version = "1.3.0"
-source = "git+https://github.com/microscaler/google-cloud-rust?branch=fix%2Fopenssl-tls-issue#601d718f825eefc83358a5392fb769181190b2d2"
+source = "git+https://github.com/microscaler/google-cloud-rust?rev=601d718f825eefc83358a5392fb769181190b2d2#601d718f825eefc83358a5392fb769181190b2d2"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2119,7 +2405,7 @@ dependencies = [
 [[package]]
 name = "google-cloud-gax-internal"
 version = "0.7.4"
-source = "git+https://github.com/microscaler/google-cloud-rust?branch=fix%2Fopenssl-tls-issue#601d718f825eefc83358a5392fb769181190b2d2"
+source = "git+https://github.com/microscaler/google-cloud-rust?rev=601d718f825eefc83358a5392fb769181190b2d2#601d718f825eefc83358a5392fb769181190b2d2"
 dependencies = [
  "bytes",
  "google-cloud-auth",
@@ -2142,7 +2428,7 @@ dependencies = [
 [[package]]
 name = "google-cloud-iam-v1"
 version = "1.1.0"
-source = "git+https://github.com/microscaler/google-cloud-rust?branch=fix%2Fopenssl-tls-issue#601d718f825eefc83358a5392fb769181190b2d2"
+source = "git+https://github.com/microscaler/google-cloud-rust?rev=601d718f825eefc83358a5392fb769181190b2d2#601d718f825eefc83358a5392fb769181190b2d2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2161,7 +2447,7 @@ dependencies = [
 [[package]]
 name = "google-cloud-location"
 version = "1.1.0"
-source = "git+https://github.com/microscaler/google-cloud-rust?branch=fix%2Fopenssl-tls-issue#601d718f825eefc83358a5392fb769181190b2d2"
+source = "git+https://github.com/microscaler/google-cloud-rust?rev=601d718f825eefc83358a5392fb769181190b2d2#601d718f825eefc83358a5392fb769181190b2d2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2179,7 +2465,7 @@ dependencies = [
 [[package]]
 name = "google-cloud-rpc"
 version = "1.1.0"
-source = "git+https://github.com/microscaler/google-cloud-rust?branch=fix%2Fopenssl-tls-issue#601d718f825eefc83358a5392fb769181190b2d2"
+source = "git+https://github.com/microscaler/google-cloud-rust?rev=601d718f825eefc83358a5392fb769181190b2d2#601d718f825eefc83358a5392fb769181190b2d2"
 dependencies = [
  "bytes",
  "google-cloud-wkt",
@@ -2191,7 +2477,7 @@ dependencies = [
 [[package]]
 name = "google-cloud-secretmanager-v1"
 version = "1.1.1"
-source = "git+https://github.com/microscaler/google-cloud-rust?branch=fix%2Fopenssl-tls-issue#601d718f825eefc83358a5392fb769181190b2d2"
+source = "git+https://github.com/microscaler/google-cloud-rust?rev=601d718f825eefc83358a5392fb769181190b2d2#601d718f825eefc83358a5392fb769181190b2d2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2211,7 +2497,7 @@ dependencies = [
 [[package]]
 name = "google-cloud-type"
 version = "1.1.0"
-source = "git+https://github.com/microscaler/google-cloud-rust?branch=fix%2Fopenssl-tls-issue#601d718f825eefc83358a5392fb769181190b2d2"
+source = "git+https://github.com/microscaler/google-cloud-rust?rev=601d718f825eefc83358a5392fb769181190b2d2#601d718f825eefc83358a5392fb769181190b2d2"
 dependencies = [
  "bytes",
  "google-cloud-wkt",
@@ -2223,7 +2509,7 @@ dependencies = [
 [[package]]
 name = "google-cloud-wkt"
 version = "1.1.0"
-source = "git+https://github.com/microscaler/google-cloud-rust?branch=fix%2Fopenssl-tls-issue#601d718f825eefc83358a5392fb769181190b2d2"
+source = "git+https://github.com/microscaler/google-cloud-rust?rev=601d718f825eefc83358a5392fb769181190b2d2#601d718f825eefc83358a5392fb769181190b2d2"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -3297,6 +3583,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lru"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
+dependencies = [
+ "hashbrown 0.15.5",
+]
+
+[[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3439,6 +3734,18 @@ dependencies = [
 
 [[package]]
 name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
+name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
@@ -3457,6 +3764,15 @@ checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
 dependencies = [
  "memchr",
  "minimal-lexical",
+]
+
+[[package]]
+name = "nom"
+version = "8.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -3798,10 +4114,71 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentelemetry"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c365a63eec4f55b7efeceb724f1336f26a9cf3427b70e59e2cd2a5b947fba96"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "once_cell",
+ "pin-project-lite",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "opentelemetry"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b84bcd6ae87133e903af7ef497404dda70c60d0ea14895fc8a5e6722754fc2a0"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror 2.0.17",
+ "tracing",
+]
+
+[[package]]
 name = "opentelemetry-semantic-conventions"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e62e29dfe041afb8ed2a6c9737ab57db4907285d999ef8ad3a59092a36bdc846"
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "692eac490ec80f24a17828d49b40b60f5aeaccdfe6a503f939713afd22bc28df"
+dependencies = [
+ "async-trait",
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "glob",
+ "once_cell",
+ "opentelemetry 0.24.0",
+ "percent-encoding",
+ "rand 0.8.5",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e14ae4f5991976fd48df6d843de219ca6d31b01daaab2dad5af2badeded372bd"
+dependencies = [
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "opentelemetry 0.31.0",
+ "percent-encoding",
+ "rand 0.9.2",
+ "thiserror 2.0.17",
+]
 
 [[package]]
 name = "option-ext"
@@ -3826,7 +4203,7 @@ checksum = "7c39b5918402d564846d5aba164c09a66cc88d232179dfd3e3c619a25a268392"
 dependencies = [
  "android_system_properties",
  "log",
- "nix",
+ "nix 0.30.1",
  "objc2",
  "objc2-foundation",
  "objc2-ui-kit",
@@ -3958,7 +4335,7 @@ dependencies = [
  "md5 0.8.0",
  "mime",
  "multer",
- "nom",
+ "nom 7.1.3",
  "onig",
  "pact-plugin-driver",
  "pact_models",
@@ -4035,7 +4412,7 @@ dependencies = [
  "logos",
  "maplit",
  "mime",
- "nom",
+ "nom 7.1.3",
  "onig",
  "parse-zoneinfo",
  "rand 0.8.5",
@@ -4088,6 +4465,12 @@ checksum = "1f2a05b18d44e2957b88f96ba460715e295bc1d7510468a2f3d3b44535d26c24"
 dependencies = [
  "regex",
 ]
+
+[[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "pbkdf2"
@@ -4780,6 +5163,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmp"
+version = "0.8.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "228ed7c16fa39782c3b3468e974aec2795e9089153cd08ee2e9aefb3613334c4"
+dependencies = [
+ "byteorder",
+ "num-traits",
+ "paste",
+]
+
+[[package]]
+name = "rmp-serde"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52e599a477cf9840e92f2cde9a7189e67b42c57532749bf90aea6ec10facd4db"
+dependencies = [
+ "byteorder",
+ "rmp",
+ "serde",
+]
+
+[[package]]
+name = "rmpv"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58450723cd9ee93273ce44a20b6ec4efe17f8ed2e3631474387bfdecf18bb2a9"
+dependencies = [
+ "num-traits",
+ "rmp",
+]
+
+[[package]]
 name = "rops"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4892,6 +5307,16 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
+ "semver",
+]
+
+[[package]]
+name = "rustc_version_runtime"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2dd18cd2bae1820af0b6ad5e54f4a51d0f3fcc53b05f845675074efcc7af071d"
+dependencies = [
+ "rustc_version",
  "semver",
 ]
 
@@ -5167,16 +5592,18 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "datadog-opentelemetry",
  "dotenv",
+ "dotenvy",
  "futures",
- "google-cloud-auth",
- "google-cloud-gax-internal",
  "google-cloud-secretmanager-v1",
  "k8s-openapi",
  "kube",
  "kube-runtime",
  "md5 0.8.0",
  "openssl",
+ "opentelemetry 0.31.0",
+ "opentelemetry_sdk 0.31.0",
  "pact_consumer",
  "prometheus",
  "regex",
@@ -5193,10 +5620,12 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
  "walkdir",
  "which",
+ "zeroize",
 ]
 
 [[package]]
@@ -5274,6 +5703,16 @@ checksum = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
 dependencies = [
  "ordered-float",
  "serde",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -5365,9 +5804,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "3.15.1"
+version = "3.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa66c845eee442168b2c8134fec70ac50dc20e760769c8ba0ad1319ca1959b04"
+checksum = "10574371d41b0d9b2cff89418eda27da52bcaff2cc8741db26382a77c29131f1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5384,9 +5823,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with_macros"
-version = "3.15.1"
+version = "3.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b91a903660542fced4e99881aa481bdbaec1634568ee02e0b8bd57c64cb38955"
+checksum = "08a72d8216842fdd57820dc78d840bef99248e35fb2554ff923319e60f2d686b"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -5530,6 +5969,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5601,6 +6046,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "sys-info"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b3a0d0aba8bf96a0e1ddfdc352fc53b3df7f39318c71854910c3c4b024ae52c"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]
@@ -5752,6 +6207,14 @@ checksum = "30cfb0125f12d9c277f35663a0a33f8c30190f4e4574868a330595412d34ebf3"
 dependencies = [
  "num-conv",
  "time-core",
+]
+
+[[package]]
+name = "tinybytes"
+version = "21.0.0"
+source = "git+https://github.com/Datadog/libdatadog?rev=f9ac67036ce7391903706fbb433fc5feec19eb95#f9ac67036ce7391903706fbb433fc5feec19eb95"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -6054,6 +6517,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-opentelemetry"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9784ed4da7d921bc8df6963f8c80a0e4ce34ba6ba76668acadd3edbd985ff3b"
+dependencies = [
+ "js-sys",
+ "once_cell",
+ "opentelemetry 0.24.0",
+ "opentelemetry_sdk 0.24.1",
+ "smallvec",
+ "tracing",
+ "tracing-core",
+ "tracing-log",
+ "tracing-subscriber",
+ "web-time",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6073,12 +6554,12 @@ dependencies = [
 
 [[package]]
 name = "tree_magic_mini"
-version = "3.2.1"
+version = "3.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52fac5f7d176f7f7f7e827299ead28ef98de642c5d93a97e0cd0816d17557f19"
+checksum = "b8765b90061cba6c22b5831f675da109ae5561588290f9fa2317adab2714d5a6"
 dependencies = [
  "memchr",
- "nom",
+ "nom 8.0.0",
  "petgraph 0.8.3",
 ]
 

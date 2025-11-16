@@ -18,7 +18,7 @@ async fn make_request(
         "GET" => client.get(url),
         "POST" => client.post(url),
         "PUT" => client.put(url),
-        _ => panic!("Unsupported HTTP method: {}", method),
+        _ => panic!("Unsupported HTTP method: {method}"),
     };
 
     // Add default headers
@@ -76,7 +76,7 @@ async fn test_aws_create_secret_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -135,7 +135,7 @@ async fn test_aws_put_secret_value_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -193,7 +193,7 @@ async fn test_aws_get_secret_value_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -252,7 +252,7 @@ async fn test_aws_describe_secret_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -311,7 +311,7 @@ async fn test_aws_secret_not_found_contract() {
         base_url.pop();
     }
     // Path always starts with /
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     // Make the actual HTTP request to verify the contract
     let client = reqwest::Client::new();
@@ -372,7 +372,7 @@ async fn test_aws_list_secrets_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -434,7 +434,7 @@ async fn test_aws_list_secret_version_ids_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -487,7 +487,7 @@ async fn test_aws_delete_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -551,7 +551,7 @@ async fn test_aws_tag_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -613,7 +613,7 @@ async fn test_aws_untag_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -665,7 +665,7 @@ async fn test_aws_update_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -717,7 +717,7 @@ async fn test_aws_restore_secret_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(
@@ -769,7 +769,7 @@ async fn test_aws_get_resource_policy_contract() {
     if base_url.ends_with('/') {
         base_url.pop();
     }
-    let mock_url = format!("{}/", base_url);
+    let mock_url = format!("{base_url}/");
 
     let client = reqwest::Client::new();
     let response = make_request(

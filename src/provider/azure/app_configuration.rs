@@ -20,7 +20,8 @@ use azure_identity::{ManagedIdentityCredential, WorkloadIdentityCredential};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{debug, info};
+use std::time::Instant;
+use tracing::{debug, info, info_span, Instrument};
 
 /// Azure App Configuration provider implementation
 pub struct AzureAppConfiguration {
@@ -30,12 +31,25 @@ pub struct AzureAppConfiguration {
     key_prefix: String,
 }
 
+impl std::fmt::Debug for AzureAppConfiguration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureAppConfiguration")
+            .field("endpoint", &self.endpoint)
+            .field("key_prefix", &self.key_prefix)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AzureAppConfiguration {
     /// Create a new Azure App Configuration client
     /// Supports Workload Identity authentication
     /// # Errors
     /// Returns an error if Azure client initialization fails
-    #[allow(clippy::missing_errors_doc)]
+    #[allow(
+        clippy::missing_errors_doc,
+        clippy::unused_async,
+        reason = "Error documentation is provided in doc comments, async signature may be needed for future credential initialization"
+    )]
     pub async fn new(
         config: &AzureConfig,
         app_config_endpoint: Option<&str>,
@@ -52,7 +66,7 @@ impl AzureAppConfiguration {
             // Extract store name from vault name pattern
             // This is a simple heuristic - users should provide endpoint explicitly
             let store_name = config.vault_name.replace("-vault", "-appconfig");
-            format!("https://{}.azconfig.io", store_name)
+            format!("https://{store_name}.azconfig.io")
         };
 
         // Ensure endpoint doesn't have trailing slash
@@ -93,7 +107,7 @@ impl AzureAppConfiguration {
 
         // Construct key prefix: {prefix}:{environment}:
         // Azure App Configuration uses colon-separated keys
-        let key_prefix = format!("{}:{}:", secret_prefix, environment);
+        let key_prefix = format!("{secret_prefix}:{environment}:");
 
         Ok(Self {
             client,
@@ -138,151 +152,226 @@ struct KeyValue {
 #[async_trait]
 impl ConfigStoreProvider for AzureAppConfiguration {
     async fn create_or_update_config(&self, config_key: &str, config_value: &str) -> Result<bool> {
-        let start = std::time::Instant::now();
         let key_name = self.construct_key_name(config_key);
+        let vault_name = self
+            .endpoint
+            .strip_prefix("https://")
+            .and_then(|s| s.strip_suffix(".azconfig.io"))
+            .unwrap_or("unknown");
+        let span = info_span!(
+            "azure.appconfig.create_or_update",
+            key.name = key_name,
+            vault.name = vault_name
+        );
+        let span_clone = span.clone();
+        let start = Instant::now();
 
-        // Get access token
-        let token = self.get_token().await?;
+        async move {
+            // Get access token
+            let token = self.get_token().await?;
 
-        // Check if key exists
-        let get_url = format!("{}/kv/{}", self.endpoint, key_name);
-        let get_response = self
-            .client
-            .get(&get_url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("Content-Type", "application/json")
-            .send()
-            .await
-            .context("Failed to check if Azure App Configuration key exists")?;
-
-        let key_exists = get_response.status().is_success();
-
-        if !key_exists {
-            // Create key-value
-            info!("Creating Azure App Configuration key: {}", key_name);
-            let kv = KeyValue {
-                key: key_name.clone(),
-                value: config_value.to_string(),
-                label: None,
-                content_type: Some("text/plain".to_string()),
-            };
-
-            let put_url = format!("{}/kv", self.endpoint);
-            let response = self
+            // Check if key exists
+            let get_url = format!("{}/kv/{}", self.endpoint, key_name);
+            let get_response = self
                 .client
-                .put(&put_url)
-                .header("Authorization", format!("Bearer {}", token))
+                .get(&get_url)
+                .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
-                .json(&kv)
                 .send()
                 .await
-                .context("Failed to create Azure App Configuration key-value")?;
+                .context("Failed to check if Azure App Configuration key exists")?;
 
-            if !response.status().is_success() {
-                let status = response.status();
-                let error_text = response.text().await.unwrap_or_default();
-                return Err(anyhow::anyhow!(
-                    "Failed to create Azure App Configuration key-value: {} - {}",
-                    status,
-                    error_text
-                ));
-            }
+            let key_exists = get_response.status().is_success();
 
-            metrics::record_secret_operation(
-                "azure_app_configuration",
-                "create",
-                start.elapsed().as_secs_f64(),
-            );
-            return Ok(true);
+            let operation_type = if !key_exists {
+                // Create key-value
+                info!("Creating Azure App Configuration key: {}", key_name);
+                let kv = KeyValue {
+                    key: key_name.clone(),
+                    value: config_value.to_string(),
+                    label: None,
+                    content_type: Some("text/plain".to_string()),
+                };
+
+                let put_url = format!("{}/kv", self.endpoint);
+                let response = self
+                    .client
+                    .put(&put_url)
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .json(&kv)
+                    .send()
+                    .await
+                    .context("Failed to create Azure App Configuration key-value")?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let error_text = response.text().await.unwrap_or_default();
+                    span_clone.record("operation.success", false);
+                    span_clone.record("operation.type", "create");
+                    span_clone.record("error.message", format!("HTTP {}: {}", status, error_text));
+                    span_clone.record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                    metrics::increment_provider_operation_errors("azure");
+                    return Err(anyhow::anyhow!(
+                        "Failed to create Azure App Configuration key-value: {status} - {error_text}"
+                    ));
+                }
+
+                metrics::record_secret_operation("azure", "create", start.elapsed().as_secs_f64());
+                span_clone.record("operation.type", "create");
+                span_clone.record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                span_clone.record("operation.success", true);
+                return Ok(true);
+            } else {
+                // Get current value
+                let current_value = self.get_config_value(config_key).await?;
+
+                if let Some(current) = current_value {
+                    if current == config_value {
+                        debug!(
+                            "Azure App Configuration key {} unchanged, skipping update",
+                            key_name
+                        );
+                        metrics::record_secret_operation("azure", "no_change", start.elapsed().as_secs_f64());
+                        span_clone.record("operation.type", "no_change");
+                        span_clone.record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                        span_clone.record("operation.success", true);
+                        return Ok(false);
+                    }
+                }
+
+                // Update key-value
+                info!("Updating Azure App Configuration key: {}", key_name);
+                let kv = KeyValue {
+                    key: key_name.clone(),
+                    value: config_value.to_string(),
+                    label: None,
+                    content_type: Some("text/plain".to_string()),
+                };
+
+                let put_url = format!("{}/kv", self.endpoint);
+                let response = self
+                    .client
+                    .put(&put_url)
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .json(&kv)
+                    .send()
+                    .await
+                    .context("Failed to update Azure App Configuration key-value")?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let error_text = response.text().await.unwrap_or_default();
+                    span_clone.record("operation.success", false);
+                    span_clone.record("operation.type", "update");
+                    span_clone.record("error.message", format!("HTTP {}: {}", status, error_text));
+                    span_clone.record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                    metrics::increment_provider_operation_errors("azure");
+                    return Err(anyhow::anyhow!(
+                        "Failed to update Azure App Configuration key-value: {status} - {error_text}"
+                    ));
+                }
+
+                metrics::record_secret_operation("azure", "update", start.elapsed().as_secs_f64());
+                "update"
+            };
+
+            span_clone.record("operation.type", operation_type);
+            span_clone.record("operation.duration_ms", start.elapsed().as_millis() as u64);
+            span_clone.record("operation.success", true);
+            Ok(true)
         }
-
-        // Get current value
-        let current_value = self.get_config_value(config_key).await?;
-
-        if let Some(current) = current_value {
-            if current == config_value {
-                debug!(
-                    "Azure App Configuration key {} unchanged, skipping update",
-                    key_name
-                );
-                metrics::record_secret_operation(
-                    "azure_app_configuration",
-                    "no_change",
-                    start.elapsed().as_secs_f64(),
-                );
-                return Ok(false);
-            }
-        }
-
-        // Update key-value
-        info!("Updating Azure App Configuration key: {}", key_name);
-        let kv = KeyValue {
-            key: key_name.clone(),
-            value: config_value.to_string(),
-            label: None,
-            content_type: Some("text/plain".to_string()),
-        };
-
-        let put_url = format!("{}/kv", self.endpoint);
-        let response = self
-            .client
-            .put(&put_url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("Content-Type", "application/json")
-            .json(&kv)
-            .send()
-            .await
-            .context("Failed to update Azure App Configuration key-value")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!(
-                "Failed to update Azure App Configuration key-value: {} - {}",
-                status,
-                error_text
-            ));
-        }
-
-        metrics::record_secret_operation(
-            "azure_app_configuration",
-            "update",
-            start.elapsed().as_secs_f64(),
-        );
-        Ok(true)
+        .instrument(span)
+        .await
     }
 
     async fn get_config_value(&self, config_key: &str) -> Result<Option<String>> {
         let key_name = self.construct_key_name(config_key);
-        let token = self.get_token().await?;
+        let vault_name = self
+            .endpoint
+            .strip_prefix("https://")
+            .and_then(|s| s.strip_suffix(".azconfig.io"))
+            .unwrap_or("unknown");
+        let span = tracing::debug_span!(
+            "azure.appconfig.get",
+            key.name = key_name,
+            vault.name = vault_name
+        );
+        let span_clone = span.clone();
+        let start = Instant::now();
 
-        let url = format!("{}/kv/{}", self.endpoint, key_name);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("Content-Type", "application/json")
-            .send()
-            .await
-            .context("Failed to get Azure App Configuration key-value")?;
+        async move {
+            let token = match self.get_token().await {
+                Ok(t) => t,
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    span_clone.record("operation.success", false);
+                    span_clone.record("error.message", format!("Failed to get token: {}", error_msg));
+                    span_clone.record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                    metrics::increment_provider_operation_errors("azure");
+                    return Err(anyhow::anyhow!("Failed to get Azure App Configuration access token: {e}"));
+                }
+            };
 
-        if response.status().is_success() {
-            let kv: KeyValue = response
-                .json()
+            let url = format!("{}/kv/{}", self.endpoint, key_name);
+            match self
+                .client
+                .get(&url)
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Content-Type", "application/json")
+                .send()
                 .await
-                .context("Failed to deserialize Azure App Configuration response")?;
-            Ok(Some(kv.value))
-        } else if response.status() == 404 {
-            Ok(None)
-        } else {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            Err(anyhow::anyhow!(
-                "Failed to get Azure App Configuration key-value: {} - {}",
-                status,
-                error_text
-            ))
+            {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        match response.json::<KeyValue>().await {
+                            Ok(kv) => {
+                                span_clone.record("operation.success", true);
+                                span_clone.record("operation.found", true);
+                                span_clone.record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                                metrics::record_secret_operation("azure", "get", start.elapsed().as_secs_f64());
+                                Ok(Some(kv.value))
+                            }
+                            Err(e) => {
+                                let error_msg = e.to_string();
+                                span_clone.record("operation.success", false);
+                                span_clone.record("error.message", format!("Failed to deserialize response: {}", error_msg));
+                                span_clone.record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                                metrics::increment_provider_operation_errors("azure");
+                                Err(anyhow::anyhow!("Failed to deserialize Azure App Configuration response: {e}"))
+                            }
+                        }
+                    } else if response.status() == 404 {
+                        span_clone.record("operation.success", true);
+                        span_clone.record("operation.found", false);
+                        span_clone.record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                        metrics::record_secret_operation("azure", "get", start.elapsed().as_secs_f64());
+                        Ok(None)
+                    } else {
+                        let status = response.status();
+                        let error_text = response.text().await.unwrap_or_default();
+                        span_clone.record("operation.success", false);
+                        span_clone.record("error.message", format!("HTTP {}: {}", status, error_text));
+                        span_clone.record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                        metrics::increment_provider_operation_errors("azure");
+                        Err(anyhow::anyhow!(
+                            "Failed to get Azure App Configuration key-value: {status} - {error_text}"
+                        ))
+                    }
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    span_clone.record("operation.success", false);
+                    span_clone.record("error.message", format!("HTTP request failed: {}", error_msg));
+                    span_clone.record("operation.duration_ms", start.elapsed().as_millis() as u64);
+                    metrics::increment_provider_operation_errors("azure");
+                    Err(anyhow::anyhow!("Failed to get Azure App Configuration key-value: {e}"))
+                }
+            }
         }
+        .instrument(span)
+        .await
     }
 
     async fn delete_config(&self, config_key: &str) -> Result<()> {
@@ -294,7 +383,7 @@ impl ConfigStoreProvider for AzureAppConfiguration {
         let response = self
             .client
             .delete(&url)
-            .header("Authorization", format!("Bearer {}", token))
+            .header("Authorization", format!("Bearer {token}"))
             .send()
             .await
             .context("Failed to delete Azure App Configuration key-value")?;
@@ -303,9 +392,7 @@ impl ConfigStoreProvider for AzureAppConfiguration {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             return Err(anyhow::anyhow!(
-                "Failed to delete Azure App Configuration key-value: {} - {}",
-                status,
-                error_text
+                "Failed to delete Azure App Configuration key-value: {status} - {error_text}"
             ));
         }
 
