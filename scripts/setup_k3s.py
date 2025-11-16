@@ -198,40 +198,75 @@ def setup_k3s_container():
             # Start container if not running
             run_command(f"docker start {CONTAINER_NAME}", check=False)
             
+            # Wait for k3s to be ready before extracting kubeconfig
+            log_info("Waiting for K3s to be ready...")
+            for i in range(30):
+                result = run_command(
+                    f"docker exec {CONTAINER_NAME} kubectl get nodes",
+                    check=False,
+                    capture_output=True
+                )
+                if result.returncode == 0:
+                    log_info("K3s is ready!")
+                    break
+                if i == 29:
+                    log_warn("K3s not ready after 60 seconds, attempting kubeconfig extraction anyway...")
+                time.sleep(2)
+            
             # Get kubeconfig from existing container
             log_info("Retrieving kubeconfig from existing container...")
             kube_dir = Path.home() / ".kube"
             kube_dir.mkdir(parents=True, exist_ok=True)
             
-            run_command(
+            # Wait for kubeconfig file to exist in container
+            for i in range(10):
+                result = run_command(
+                    f"docker exec {CONTAINER_NAME} test -f /etc/rancher/k3s/k3s.yaml",
+                    check=False
+                )
+                if result.returncode == 0:
+                    break
+                if i == 9:
+                    log_warn("k3s.yaml not found in container, kubeconfig may not be ready")
+                time.sleep(1)
+            
+            result = run_command(
                 f"docker cp {CONTAINER_NAME}:/etc/rancher/k3s/k3s.yaml {kube_dir}/k3s-{CLUSTER_NAME}.yaml",
                 check=False
             )
             
-            # Update kubeconfig to use localhost
-            kubeconfig_path = kube_dir / f"k3s-{CLUSTER_NAME}.yaml"
-            if kubeconfig_path.exists():
-                content = kubeconfig_path.read_text()
-                content = content.replace("127.0.0.1", "localhost")
-                kubeconfig_path.write_text(content)
-                
-                # Merge kubeconfig into main config
-                main_config = kube_dir / "config"
-                if main_config.exists():
+            if result.returncode != 0:
+                log_warn(f"Failed to copy kubeconfig: {result.stderr}")
+                log_info("You can manually extract it later using: python3 scripts/extract_k3s_kubeconfig.py")
+            else:
+                # Update kubeconfig to use localhost
+                kubeconfig_path = kube_dir / f"k3s-{CLUSTER_NAME}.yaml"
+                if kubeconfig_path.exists():
+                    content = kubeconfig_path.read_text()
+                    content = content.replace("127.0.0.1", "localhost")
+                    kubeconfig_path.write_text(content)
+                    
+                    # Merge kubeconfig into main config
+                    main_config = kube_dir / "config"
+                    if main_config.exists():
+                        result = run_command(
+                            f"KUBECONFIG={kubeconfig_path}:{main_config} kubectl config view --flatten > {main_config}.new",
+                            check=False
+                        )
+                        if result.returncode == 0 and (main_config.with_suffix(".new")).exists():
+                            (main_config.with_suffix(".new")).replace(main_config)
+                        else:
+                            log_warn(f"Failed to merge kubeconfig: {result.stderr}")
+                    else:
+                        shutil.copy(kubeconfig_path, main_config)
+                    
+                    # Ensure context is named correctly
                     run_command(
-                        f"KUBECONFIG={kubeconfig_path}:{main_config} kubectl config view --flatten > {main_config}.new",
+                        f"kubectl config rename-context default k3s-{CLUSTER_NAME}",
                         check=False
                     )
-                    if (main_config.with_suffix(".new")).exists():
-                        (main_config.with_suffix(".new")).replace(main_config)
-                else:
-                    shutil.copy(kubeconfig_path, main_config)
-                
-                # Ensure context is named correctly
-                run_command(
-                    f"kubectl config rename-context default k3s-{CLUSTER_NAME}",
-                    check=False
-                )
+                    
+                    log_info("✅ Kubeconfig extracted and merged successfully!")
             
             log_info("✅ K3s cluster is ready!")
             log_info(f"📋 Context name: k3s-{CLUSTER_NAME}")

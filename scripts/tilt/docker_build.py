@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Docker build with cleanup and timestamp.
+Docker build script for Tilt custom_build.
 
 This script replaces the inline shell script in custom_build for Docker builds.
 It handles:
-- Cleaning up old images
-- Building Docker image with timestamp
+- Building Docker image (with layer caching for speed)
 - Tagging and pushing to registry
+
+Note: Uses Docker layer caching for faster incremental builds. Only changed layers
+will be rebuilt, significantly speeding up the build process.
 """
 
 import os
 import subprocess
 import sys
-import time
 
 
 def run_command(cmd_list, check=False, capture_output=True):
@@ -34,40 +35,15 @@ def main():
     controller_dir = os.getenv("CONTROLLER_DIR", ".")
     expected_ref = os.getenv("EXPECTED_REF", f"{image_name}:tilt")
     
-    # Cleanup before build
-    print("🧹 Cleaning up old images...")
-    run_command(["docker", "rmi", f"{image_name}:tilt"], check=False)
-    
-    # Remove all tilt-* tags
-    list_tags_result = run_command(
-        ["docker", "images", image_name, "--format", "{{.Tag}}"],
-        check=False
-    )
-    if list_tags_result.returncode == 0 and list_tags_result.stdout:
-        for tag in list_tags_result.stdout.strip().split("\n"):
-            tag = tag.strip()
-            if tag.startswith("tilt-"):
-                run_command(["docker", "rmi", f"{image_name}:{tag}"], check=False)
-                run_command(["docker", "rmi", f"localhost:5002/{controller_name}:{tag}"], check=False)
-    
-    run_command(["docker", "rmi", f"localhost:5002/{controller_name}:tilt"], check=False)
-    
-    # Clean up kind registry cache
-    run_command(
-        ["docker", "exec", "kind-registry", "sh", "-c", f"rm -rf /var/lib/registry/docker/registry/v2/repositories/{controller_name}/"],
-        check=False
-    )
-    
-    # Build with timestamp
-    timestamp = str(int(time.time()))
     dockerfile_path = os.path.join(controller_dir, "Dockerfile.dev")
-    image_tag = f"{image_name}:tilt-{timestamp}"
     
-    print(f"🔨 Building Docker image with timestamp {timestamp}...")
+    print(f"🔨 Building Docker image (using cache)...")
     
-    # Build Docker image
+    # Build Docker image with the expected reference tag
+    # Using Docker layer caching for faster builds - only changed layers rebuild
+    # Tilt will generate content-hash tags (e.g., tilt-23c8db1e702a59c9) automatically
     build_result = run_command(
-        ["docker", "build", "--no-cache", "-f", dockerfile_path, "-t", image_tag, controller_dir],
+        ["docker", "build", "-f", dockerfile_path, "-t", expected_ref, controller_dir],
         check=False,
         capture_output=False
     )
@@ -75,16 +51,7 @@ def main():
         print("❌ Error: Docker build failed", file=sys.stderr)
         sys.exit(build_result.returncode)
     
-    # Tag image
-    tag_result = run_command(
-        ["docker", "tag", image_tag, expected_ref],
-        check=False
-    )
-    if tag_result.returncode != 0:
-        print("❌ Error: Docker tag failed", file=sys.stderr)
-        sys.exit(tag_result.returncode)
-    
-    # Push image
+    # Push image - Tilt will retag with content hash and use that
     push_result = run_command(
         ["docker", "push", expected_ref],
         check=False,
@@ -95,6 +62,12 @@ def main():
         sys.exit(push_result.returncode)
     
     print(f"✅ Docker image built and pushed: {expected_ref}")
+    
+    # CRITICAL: Output the image reference to stdout for Tilt's custom_build
+    # Tilt expects the script to output the final image reference
+    # Tilt will automatically create content-hash tags (e.g., tilt-{hash}) 
+    # and retag/push as needed
+    print(expected_ref, file=sys.stdout)
 
 
 if __name__ == "__main__":

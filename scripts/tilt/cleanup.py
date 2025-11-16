@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Cleanup controller pod and images before rebuild.
+Cleanup controller images before rebuild.
 
 This script replaces the inline shell script in Tiltfile for cleanup.
 It handles:
-- Deleting controller pods
 - Removing Docker images
 - Cleaning up kind registry cache
+
+Note: Pod deletion is no longer needed as the root cause of binary/container
+update issues has been identified and resolved.
 """
 
 import os
@@ -31,14 +33,7 @@ def main():
     image_name = os.getenv("IMAGE_NAME", "localhost:5002/secret-manager-controller")
     controller_name = os.getenv("CONTROLLER_NAME", "secret-manager-controller")
     
-    print("🧹 Cleaning up controller pod and image before rebuild...")
-    
-    # Delete controller pod (will be recreated by deployment)
-    print("📋 Deleting controller pod...")
-    run_command(
-        ["kubectl", "delete", "pod", "-n", "microscaler-system", "-l", "app=secret-manager-controller", "--ignore-not-found=true"],
-        check=False
-    )
+    print("🧹 Cleaning up controller images before rebuild...")
     
     # Delete all versions of the image to force fresh build
     print("📋 Deleting all image tags...")

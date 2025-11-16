@@ -17,7 +17,7 @@ spec:
       containers:
       - name: controller
         image: localhost:5002/secret-manager-controller
-        imagePullPolicy: Never
+        imagePullPolicy: IfNotPresent
         env:
         - name: RUST_LOG
           value: "info"
@@ -70,12 +70,6 @@ spec:
             port: metrics
           initialDelaySeconds: 10
           periodSeconds: 10
-        # Volume mount for JSON credentials (only needed if not using Workload Identity)
-        # Uncomment the following if using JSON credentials:
-        # volumeMounts:
-        # - name: gcp-credentials
-        #   mountPath: /var/secrets/google
-        #   readOnly: true
         resources:
           requests:
             cpu: 100m
@@ -83,10 +77,5 @@ spec:
           limits:
             cpu: 500m
             memory: 512Mi
-      # Volume for JSON credentials (only needed if not using Workload Identity)
-      # Uncomment the following if using JSON credentials:
-      # volumes:
-      # - name: gcp-credentials
-      #   secret:
-      #     secretName: gcp-secret-manager-credentials
+
 

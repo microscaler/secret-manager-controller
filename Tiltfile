@@ -76,42 +76,25 @@ CRDGEN_ARTIFACT_PATH = 'build_artifacts/crdgen'
 
 
 # ====================
-# Build Rust Binaries
+# Build and Copy Rust Binaries
 # ====================
-# Build both controller and crdgen binaries on host (cross-compilation)
+# Build binaries on host (cross-compilation) and copy to build_artifacts
 
 local_resource(
-    'secret-manager-controller-build',
-    cmd='python3 scripts/tilt/build_binaries.py',
+    'secret-manager-controller-build-and-copy',
+    cmd='python3 scripts/tilt/build_and_copy_binaries.py',
     deps=[
         '%s/src' % CONTROLLER_DIR,
         '%s/Cargo.toml' % CONTROLLER_DIR,
         '%s/Cargo.lock' % CONTROLLER_DIR,
         './scripts/host_aware_build.py',
-        './scripts/tilt/build_binaries.py',
+        './scripts/copy_binary.py',
+        './scripts/tilt/build_and_copy_binaries.py',
     ],
     env={
         'CONTROLLER_DIR': CONTROLLER_DIR,
         'BINARY_NAME': BINARY_NAME,
     },
-    labels=['controllers'],
-    allow_parallel=False,
-)
-
-# ====================
-# Copy Binaries to Artifacts
-# ====================
-# Copy binaries to build_artifacts directory for Docker builds
-
-local_resource(
-    'secret-manager-controller-copy',
-    cmd='python3 scripts/tilt/copy_binaries.py',
-    deps=[BINARY_PATH, CRDGEN_PATH, './scripts/copy_binary.py', './scripts/tilt/copy_binaries.py'],
-    env={
-        'CONTROLLER_DIR': CONTROLLER_DIR,
-        'BINARY_NAME': BINARY_NAME,
-    },
-    resource_deps=['secret-manager-controller-build'],
     labels=['controllers'],
     allow_parallel=False,
 )
@@ -133,7 +116,7 @@ local_resource(
     env={
         'CONTROLLER_DIR': CONTROLLER_DIR,
     },
-    resource_deps=['secret-manager-controller-build'],
+    resource_deps=['secret-manager-controller-build-and-copy'],
     labels=['controllers'],
     allow_parallel=True,
 )
@@ -142,20 +125,7 @@ local_resource(
 # Docker Build
 # ====================
 # Build Docker image using custom_build (matches PriceWhisperer pattern)
-# Delete pod and image before building to force fresh rebuild
-
-local_resource(
-    'secret-manager-controller-cleanup',
-    cmd='python3 scripts/tilt/cleanup.py',
-    deps=['./scripts/tilt/cleanup.py'],
-    env={
-        'IMAGE_NAME': IMAGE_NAME,
-        'CONTROLLER_NAME': CONTROLLER_NAME,
-    },
-    resource_deps=[],
-    labels=['controllers'],
-    allow_parallel=True,
-)
+# Note: docker_build.py handles image cleanup before building
 
 custom_build(
     IMAGE_NAME,
@@ -195,13 +165,18 @@ k8s_yaml(kustomize('%s/config' % CONTROLLER_DIR))
 k8s_resource(
     CONTROLLER_NAME,
     labels=['controllers'],
-    resource_deps=['secret-manager-controller-copy', 'secret-manager-controller-crd-gen', 'secret-manager-controller-cleanup'],
+    resource_deps=['secret-manager-controller-build-and-copy', 'secret-manager-controller-crd-gen'],
 )
 
 # ====================
 # Pact Broker Deployment
 # ====================
 # Deploy Pact Broker for contract testing
+# 
+# INDEPENDENT: Pact resources operate independently of controller resources.
+# They can be started/stopped/managed separately using Tilt labels.
+# Use 'tilt up pact' to run only Pact resources, or filter by label in UI.
+# Note: Labels on k8s_resource() ensure isolation - controller won't wait for pact resources.
 
 k8s_yaml(kustomize('pact-broker/k8s'))
 
@@ -209,12 +184,16 @@ k8s_resource(
     'pact-broker',
     labels=['pact'],
     port_forwards=['9292:9292'],
+    # No resource_deps - completely independent from controllers
 )
 
 # ====================
 # Pact Contract Publishing
 # ====================
 # Run Pact tests and publish contracts to broker
+# 
+# INDEPENDENT: Only depends on pact-broker, not on controller resources.
+# Can run independently: 'tilt up pact' or filter by 'pact' label.
 
 local_resource(
     'pact-tests-and-publish',
@@ -224,7 +203,7 @@ local_resource(
         '%s/Cargo.toml' % CONTROLLER_DIR,
         'scripts/pact_publish.py',
     ],
-    resource_deps=['pact-broker'],
+    resource_deps=['pact-broker'],  # Only depends on pact-broker, not controllers
     labels=['pact'],
     allow_parallel=False,
 )
