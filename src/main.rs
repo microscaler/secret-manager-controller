@@ -502,6 +502,10 @@ pub struct SecretManagerConfigStatus {
     /// Last reconciliation time
     #[serde(default)]
     pub last_reconcile_time: Option<String>,
+    /// Next scheduled reconciliation time (RFC3339)
+    /// Used to persist periodic reconciliation schedule across watch restarts
+    #[serde(default)]
+    pub next_reconcile_time: Option<String>,
     /// Number of secrets synced
     #[serde(default)]
     pub secrets_synced: Option<i32>,
@@ -898,22 +902,85 @@ async fn main() -> Result<()> {
                             .and_then(|ann| ann.get("secret-management.microscaler.io/reconcile"))
                             .is_some();
 
+                        // Check if this is a periodic reconciliation (requeue-triggered)
+                        // Periodic reconciliations should run even if generation matches, as they check
+                        // for external state changes (secrets in cloud provider, Git repository updates)
+                        // We use next_reconcile_time from status to persist the schedule across watch restarts
+                        // CRITICAL: If generation matches but next_reconcile_time has passed, this is a periodic reconciliation
+                        let is_periodic_reconcile = if generation == observed_generation && observed_generation > 0 {
+                            if let Some(status) = &obj.status {
+                                if let Some(next_reconcile_time) = &status.next_reconcile_time {
+                                    // Check if next_reconcile_time has passed (with 2s tolerance for timing)
+                                    if let Ok(next_time) = chrono::DateTime::parse_from_rfc3339(next_reconcile_time) {
+                                        let next_time_utc = next_time.with_timezone(&chrono::Utc);
+                                        let now = chrono::Utc::now();
+                                        // If current time >= next_reconcile_time (with 2s tolerance), this is a periodic reconciliation
+                                        let is_periodic = now >= next_time_utc - chrono::Duration::seconds(2);
+                                        if is_periodic {
+                                            info!(
+                                                resource.name = name.as_str(),
+                                                resource.namespace = namespace.as_str(),
+                                                next_reconcile_time = next_reconcile_time.as_str(),
+                                                "Detected periodic reconciliation - next_reconcile_time has passed"
+                                            );
+                                        }
+                                        is_periodic
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    // No next_reconcile_time means first reconciliation or not yet scheduled - not periodic
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            // Generation doesn't match, so this is a spec change, not periodic
+                            false
+                        };
+
                         // CRITICAL: Only reconcile if spec changed (generation != observed_generation)
                         // This prevents infinite loops from status updates triggering reconciliations
                         // Status-only updates don't change generation, so we skip them
                         // Exceptions:
                         // 1. Always reconcile if observed_generation is 0 (first reconciliation)
                         // 2. Always reconcile if manual trigger annotation is present (msmctl reconcile)
-                        if generation == observed_generation && observed_generation > 0 && !is_manual_trigger {
+                        // 3. Always reconcile if this is a periodic reconciliation (requeue-triggered)
+                        if generation == observed_generation && observed_generation > 0 && !is_manual_trigger && !is_periodic_reconcile {
                             debug!(
                                 resource.name = name.as_str(),
                                 resource.namespace = namespace.as_str(),
                                 generation = generation,
                                 observed_generation = observed_generation,
-                                "Skipping reconciliation - only status changed, spec unchanged (no manual trigger)"
+                                "Skipping reconciliation - only status changed, spec unchanged (no manual trigger, not periodic)"
                             );
                             // Return Action::await_change() to wait for next spec change
                             return Ok(Action::await_change());
+                        }
+
+                        if is_periodic_reconcile {
+                            info!(
+                                resource.name = name.as_str(),
+                                resource.namespace = namespace.as_str(),
+                                "Periodic reconciliation triggered - proceeding despite generation match"
+                            );
+                        } else if generation == observed_generation && observed_generation > 0 {
+                            // Log why periodic reconciliation wasn't detected
+                            debug!(
+                                resource.name = name.as_str(),
+                                resource.namespace = namespace.as_str(),
+                                has_status = obj.status.is_some(),
+                                has_next_reconcile_time = obj.status.as_ref()
+                                    .and_then(|s| s.next_reconcile_time.as_ref())
+                                    .is_some(),
+                                next_reconcile_time = obj.status.as_ref()
+                                    .and_then(|s| s.next_reconcile_time.as_ref())
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("none"),
+                                reconcile_interval = obj.spec.reconcile_interval.as_str(),
+                                "Periodic reconciliation check - generation matches but next_reconcile_time not yet reached"
+                            );
                         }
 
                         if is_manual_trigger {

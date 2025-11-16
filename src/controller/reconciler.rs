@@ -1607,12 +1607,25 @@ impl Reconciler {
             message: message.map(|s| s.to_string()),
         });
 
+        // Calculate next reconcile time based on reconcile interval
+        let next_reconcile_time = Self::parse_kubernetes_duration(&config.spec.reconcile_interval)
+            .ok()
+            .map(|duration| {
+                chrono::Utc::now()
+                    .checked_add_signed(
+                        chrono::Duration::from_std(duration).unwrap_or(chrono::Duration::zero()),
+                    )
+                    .map(|dt| dt.to_rfc3339())
+            })
+            .flatten();
+
         let status = SecretManagerConfigStatus {
             phase: Some(phase.to_string()),
             description: message.map(|s| s.to_string()),
             conditions,
             observed_generation: config.metadata.generation,
             last_reconcile_time: Some(chrono::Utc::now().to_rfc3339()),
+            next_reconcile_time,
             secrets_synced: None,
         };
 
@@ -1897,6 +1910,17 @@ impl Reconciler {
             }],
             observed_generation: config.metadata.generation,
             last_reconcile_time: Some(chrono::Utc::now().to_rfc3339()),
+            next_reconcile_time: Self::parse_kubernetes_duration(&config.spec.reconcile_interval)
+                .ok()
+                .map(|duration| {
+                    chrono::Utc::now()
+                        .checked_add_signed(
+                            chrono::Duration::from_std(duration)
+                                .unwrap_or(chrono::Duration::zero()),
+                        )
+                        .map(|dt| dt.to_rfc3339())
+                })
+                .flatten(),
             secrets_synced: Some(secrets_synced),
         };
 
@@ -1926,7 +1950,7 @@ impl Reconciler {
     /// Parse Kubernetes duration string into std::time::Duration
     /// Supports formats: "30s", "1m", "5m", "1h", "2h", "1d"
     /// Returns Duration or error if format is invalid
-    fn parse_kubernetes_duration(duration_str: &str) -> Result<std::time::Duration> {
+    pub fn parse_kubernetes_duration(duration_str: &str) -> Result<std::time::Duration> {
         let duration_trimmed = duration_str.trim();
 
         if duration_trimmed.is_empty() {

@@ -356,6 +356,10 @@ pub struct SecretManagerConfigStatus {
     pub observed_generation: Option<i64>,
     #[serde(default)]
     pub last_reconcile_time: Option<String>,
+    /// Next scheduled reconciliation time (RFC3339)
+    /// Used to persist periodic reconciliation schedule across watch restarts
+    #[serde(default)]
+    pub next_reconcile_time: Option<String>,
     #[serde(default)]
     pub secrets_synced: Option<i32>,
 }
