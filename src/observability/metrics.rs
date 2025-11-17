@@ -218,11 +218,107 @@ static PROVIDER_OPERATION_ERRORS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(
     .expect("Failed to create PROVIDER_OPERATION_ERRORS_TOTAL metric - this should never happen")
 });
 
+// Artifact download and extraction metrics
+static ARTIFACT_DOWNLOADS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
+    IntCounter::new(
+        "secret_manager_artifact_downloads_total",
+        "Total number of artifact downloads (FluxCD/ArgoCD)",
+    )
+    .expect("Failed to create ARTIFACT_DOWNLOADS_TOTAL metric - this should never happen")
+});
+
+static ARTIFACT_DOWNLOAD_DURATION: LazyLock<Histogram> = LazyLock::new(|| {
+    Histogram::with_opts(
+        prometheus::HistogramOpts::new(
+            "secret_manager_artifact_download_duration_seconds",
+            "Duration of artifact downloads in seconds",
+        )
+        .buckets(vec![0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0]),
+    )
+    .expect("Failed to create ARTIFACT_DOWNLOAD_DURATION metric - this should never happen")
+});
+
+static ARTIFACT_DOWNLOAD_ERRORS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
+    IntCounter::new(
+        "secret_manager_artifact_download_errors_total",
+        "Total number of artifact download errors",
+    )
+    .expect("Failed to create ARTIFACT_DOWNLOAD_ERRORS_TOTAL metric - this should never happen")
+});
+
+static ARTIFACT_EXTRACTIONS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
+    IntCounter::new(
+        "secret_manager_artifact_extractions_total",
+        "Total number of artifact extractions",
+    )
+    .expect("Failed to create ARTIFACT_EXTRACTIONS_TOTAL metric - this should never happen")
+});
+
+static ARTIFACT_EXTRACTION_DURATION: LazyLock<Histogram> = LazyLock::new(|| {
+    Histogram::with_opts(
+        prometheus::HistogramOpts::new(
+            "secret_manager_artifact_extraction_duration_seconds",
+            "Duration of artifact extractions in seconds",
+        )
+        .buckets(vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0]),
+    )
+    .expect("Failed to create ARTIFACT_EXTRACTION_DURATION metric - this should never happen")
+});
+
+static ARTIFACT_EXTRACTION_ERRORS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
+    IntCounter::new(
+        "secret_manager_artifact_extraction_errors_total",
+        "Total number of artifact extraction errors",
+    )
+    .expect("Failed to create ARTIFACT_EXTRACTION_ERRORS_TOTAL metric - this should never happen")
+});
+
+// Secret publishing metrics
+static SECRETS_PUBLISHED_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        prometheus::Opts::new(
+            "secret_manager_secrets_published_total",
+            "Total number of secrets published to providers",
+        ),
+        &["provider"],
+    )
+    .expect("Failed to create SECRETS_PUBLISHED_TOTAL metric - this should never happen")
+});
+
+static SECRETS_SKIPPED_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        prometheus::Opts::new(
+            "secret_manager_secrets_skipped_total",
+            "Total number of secrets skipped (no changes or errors)",
+        ),
+        &["provider", "reason"],
+    )
+    .expect("Failed to create SECRETS_SKIPPED_TOTAL metric - this should never happen")
+});
+
+// Requeue metrics
+static REQUEUES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        prometheus::Opts::new(
+            "secret_manager_requeues_total",
+            "Total number of reconciliation requeues",
+        ),
+        &["reason"],
+    )
+    .expect("Failed to create REQUEUES_TOTAL metric - this should never happen")
+});
+
 #[allow(
     clippy::missing_errors_doc,
     reason = "Error documentation is provided in doc comments"
 )]
 pub fn register_metrics() -> Result<()> {
+    // Prometheus Registry::register() takes ownership (Box<dyn Collector>)
+    // Since metrics are stored in LazyLock, we must clone them.
+    // Prometheus metrics internally use Arc for their data, so cloning is cheap:
+    // - Cloning just copies the wrapper (small struct)
+    // - The actual metric data is shared via Arc (reference count increment)
+    // - This only happens once at startup, so performance impact is negligible
     REGISTRY.register(Box::new(RECONCILIATIONS_TOTAL.clone()))?;
     REGISTRY.register(Box::new(RECONCILIATION_ERRORS_TOTAL.clone()))?;
     REGISTRY.register(Box::new(RECONCILIATION_DURATION.clone()))?;
@@ -244,6 +340,15 @@ pub fn register_metrics() -> Result<()> {
     REGISTRY.register(Box::new(PROVIDER_OPERATIONS_TOTAL.clone()))?;
     REGISTRY.register(Box::new(PROVIDER_OPERATION_DURATION.clone()))?;
     REGISTRY.register(Box::new(PROVIDER_OPERATION_ERRORS_TOTAL.clone()))?;
+    REGISTRY.register(Box::new(ARTIFACT_DOWNLOADS_TOTAL.clone()))?;
+    REGISTRY.register(Box::new(ARTIFACT_DOWNLOAD_DURATION.clone()))?;
+    REGISTRY.register(Box::new(ARTIFACT_DOWNLOAD_ERRORS_TOTAL.clone()))?;
+    REGISTRY.register(Box::new(ARTIFACT_EXTRACTIONS_TOTAL.clone()))?;
+    REGISTRY.register(Box::new(ARTIFACT_EXTRACTION_DURATION.clone()))?;
+    REGISTRY.register(Box::new(ARTIFACT_EXTRACTION_ERRORS_TOTAL.clone()))?;
+    REGISTRY.register(Box::new(SECRETS_PUBLISHED_TOTAL.clone()))?;
+    REGISTRY.register(Box::new(SECRETS_SKIPPED_TOTAL.clone()))?;
+    REGISTRY.register(Box::new(REQUEUES_TOTAL.clone()))?;
 
     Ok(())
 }
@@ -347,6 +452,50 @@ pub fn observe_git_clone_duration(duration: f64) {
 
 pub fn increment_git_clone_errors_total() {
     GIT_CLONE_ERRORS_TOTAL.inc();
+}
+
+// Artifact download metrics
+pub fn increment_artifact_downloads_total() {
+    ARTIFACT_DOWNLOADS_TOTAL.inc();
+}
+
+pub fn observe_artifact_download_duration(duration: f64) {
+    ARTIFACT_DOWNLOAD_DURATION.observe(duration);
+}
+
+pub fn increment_artifact_download_errors_total() {
+    ARTIFACT_DOWNLOAD_ERRORS_TOTAL.inc();
+}
+
+// Artifact extraction metrics
+pub fn increment_artifact_extractions_total() {
+    ARTIFACT_EXTRACTIONS_TOTAL.inc();
+}
+
+pub fn observe_artifact_extraction_duration(duration: f64) {
+    ARTIFACT_EXTRACTION_DURATION.observe(duration);
+}
+
+pub fn increment_artifact_extraction_errors_total() {
+    ARTIFACT_EXTRACTION_ERRORS_TOTAL.inc();
+}
+
+// Secret publishing metrics
+pub fn increment_secrets_published_total(provider: &str, count: u64) {
+    SECRETS_PUBLISHED_TOTAL
+        .with_label_values(&[provider])
+        .inc_by(count);
+}
+
+pub fn increment_secrets_skipped_total(provider: &str, reason: &str) {
+    SECRETS_SKIPPED_TOTAL
+        .with_label_values(&[provider, reason])
+        .inc();
+}
+
+// Requeue metrics
+pub fn increment_requeues_total(reason: &str) {
+    REQUEUES_TOTAL.with_label_values(&[reason]).inc();
 }
 
 #[cfg(test)]

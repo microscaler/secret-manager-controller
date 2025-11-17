@@ -195,24 +195,24 @@ impl TriggerSource {
 /// Backoff state for a specific resource
 /// Tracks error count and backoff calculator for progressive retries
 #[derive(Debug, Clone)]
-struct BackoffState {
-    backoff: FibonacciBackoff,
-    error_count: u32,
+pub struct BackoffState {
+    pub backoff: FibonacciBackoff,
+    pub error_count: u32,
 }
 
 impl BackoffState {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             backoff: FibonacciBackoff::new(1, 10), // 1 minute min, 10 minutes max (converted to seconds internally)
             error_count: 0,
         }
     }
 
-    fn increment_error(&mut self) {
+    pub fn increment_error(&mut self) {
         self.error_count += 1;
     }
 
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.error_count = 0;
         self.backoff.reset();
     }
@@ -226,7 +226,8 @@ pub struct Reconciler {
     // SOPS private key is wrapped in Arc<AsyncMutex> to allow hot-reloading when secret changes
     sops_private_key: Arc<AsyncMutex<Option<String>>>,
     // Backoff state per resource (identified by namespace/name)
-    backoff_states: Arc<Mutex<HashMap<String, BackoffState>>>,
+    // Moved to error_policy() layer to prevent blocking watch/timer paths
+    pub backoff_states: Arc<Mutex<HashMap<String, BackoffState>>>,
 }
 
 impl std::fmt::Debug for Reconciler {
@@ -654,69 +655,10 @@ impl Reconciler {
         ctx: std::sync::Arc<Reconciler>,
         trigger_source: TriggerSource,
     ) -> Result<Action, ReconcilerError> {
-        // Clone config for use in error handler
-        let config_clone = config.clone();
-
-        // Wrap entire reconciliation in error handling to prevent panics
-        match Self::reconcile_internal(config, ctx.clone(), trigger_source).await {
-            Ok(action) => Ok(action),
-            Err(e) => {
-                let name = config_clone.metadata.name.as_deref().unwrap_or("unknown");
-                let resource_key = format!(
-                    "{}/{}",
-                    config_clone
-                        .metadata
-                        .namespace
-                        .as_deref()
-                        .unwrap_or("default"),
-                    name
-                );
-
-                // Get or create backoff state for this resource
-                let backoff_seconds = {
-                    let mut states = ctx.backoff_states.lock().unwrap();
-                    let state = states
-                        .entry(resource_key.clone())
-                        .or_insert_with(BackoffState::new);
-                    state.increment_error();
-                    let backoff = state.backoff.next_backoff_seconds();
-                    let error_count = state.error_count;
-                    (backoff, error_count)
-                };
-
-                let next_trigger_time =
-                    chrono::Utc::now() + chrono::Duration::seconds(backoff_seconds.0 as i64);
-
-                error!(
-                    "❌ Reconciliation failed for {} (error count: {}): {}",
-                    name, backoff_seconds.1, e
-                );
-                info!(
-                    "🔄 Retrying with Fibonacci backoff: {}s (trigger source: error-backoff)",
-                    backoff_seconds.0
-                );
-                info!(
-                    "📅 Next retry scheduled: {} (in {}s, trigger source: error-backoff)",
-                    next_trigger_time.to_rfc3339(),
-                    backoff_seconds.0
-                );
-
-                observability::metrics::increment_reconciliation_errors();
-
-                // Return requeue action with backoff duration
-                // Note: We return Ok here to use backoff scheduling instead of error path
-                //
-                // TODO: Consider moving this retry logic to error_policy in main.rs to avoid
-                // potential kube-rs timer deadlock issues. The error_policy is designed by
-                // kube-runtime to handle retries safely without blocking the timer event stream.
-                // This wrapper converts errors to Ok(Action::requeue()), which bypasses the
-                // error_policy entirely and could potentially block timers if many resources
-                // fail simultaneously. However, the Fibonacci backoff reduces this risk.
-                Ok(Action::requeue(std::time::Duration::from_secs(
-                    backoff_seconds.0,
-                )))
-            }
-        }
+        // Reconcile internal logic - errors are handled by error_policy() in main.rs
+        // This separation prevents blocking watch/timer paths when many resources fail
+        // Backoff logic is now in error_policy() layer as recommended by kube-rs best practices
+        Self::reconcile_internal(config, ctx.clone(), trigger_source).await
     }
 
     #[allow(
@@ -1494,6 +1436,8 @@ impl Reconciler {
         // On successful reconciliation, reset the backoff timer to use the resource's reconcile_interval
         // This ensures that after a successful reconciliation (even during backoff), we return to
         // the normal schedule defined in the resource spec
+        // Note: Backoff state is managed in error_policy() layer, but we reset it here on success
+        // to ensure clean state for next reconciliation
         let resource_key = format!(
             "{}/{}",
             config.metadata.namespace.as_deref().unwrap_or("default"),
@@ -1551,6 +1495,7 @@ impl Reconciler {
                     duration.as_secs(),
                     config.spec.reconcile_interval
                 );
+                observability::metrics::increment_requeues_total("timer-based");
                 Ok(Action::requeue(duration))
             }
             Err(e) => {
@@ -1575,6 +1520,7 @@ impl Reconciler {
                     config.spec.reconcile_interval, name, e, backoff_duration.as_secs(), error_count + 1
                 );
 
+                observability::metrics::increment_requeues_total("duration-parsing-error");
                 Ok(Action::requeue(backoff_duration))
             }
         }
@@ -1738,7 +1684,16 @@ impl Reconciler {
             }
         }
 
-        // Download and extract artifact
+        // Download and extract artifact with OTEL spans and metrics
+        let download_span = info_span!(
+            "artifact.download",
+            artifact.url = artifact_url.as_str(),
+            artifact.revision = revision,
+            artifact.cache_path = cache_path.display().to_string()
+        );
+        let download_start = Instant::now();
+        observability::metrics::increment_artifact_downloads_total();
+
         info!(
             "Downloading FluxCD artifact from {} (revision: {}, dir: {})",
             artifact_url, revision, revision_dir
@@ -1816,6 +1771,9 @@ impl Reconciler {
                     error!("  3. Test from controller pod: kubectl exec -n microscaler-system <pod> -- curl -v <url>");
                 }
 
+                observability::metrics::increment_artifact_download_errors_total();
+                download_span.record("operation.success", false);
+                download_span.record("error.message", format!("{}", e));
                 return Err(anyhow::anyhow!(
                     "Failed to download artifact from {}: {} (details: {:?})",
                     artifact_url,
@@ -1828,6 +1786,9 @@ impl Reconciler {
         if !response.status().is_success() {
             let status = response.status();
             let status_text = response.status().canonical_reason().unwrap_or("Unknown");
+            observability::metrics::increment_artifact_download_errors_total();
+            download_span.record("operation.success", false);
+            download_span.record("error.status_code", status.as_u16() as u64);
             error!(
                 "Artifact download returned HTTP {} {} from {}",
                 status.as_u16(),
@@ -1841,45 +1802,195 @@ impl Reconciler {
             ));
         }
 
-        // Write downloaded content to temporary file
+        // Verify Content-Length matches actual download size (detect partial downloads)
+        let expected_size = response.content_length();
         let mut file = tokio::fs::File::create(&temp_tar).await.context(format!(
             "Failed to create temp file: {}",
             temp_tar.display()
         ))?;
 
-        let content = response
-            .bytes()
-            .await
-            .context("Failed to read response body")?;
-
+        // Stream download to detect partial downloads and verify size
+        let mut downloaded_size: u64 = 0;
+        let mut stream = response.bytes_stream();
+        use futures::StreamExt;
         use tokio::io::AsyncWriteExt;
-        file.write_all(&content)
-            .await
-            .context("Failed to write artifact to file")?;
 
-        drop(file); // Close file before extraction
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.context("Failed to read chunk from download stream")?;
+            downloaded_size += chunk.len() as u64;
+            file.write_all(&chunk)
+                .await
+                .context("Failed to write chunk to file")?;
+        }
 
-        // Extract tar.gz file
-        info!("Extracting artifact to {}", cache_path.display());
+        drop(file); // Close file before verification
 
-        // Use tar command to extract (more reliable than Rust tar crate for gzip)
+        // Verify download size matches Content-Length (if provided)
+        if let Some(expected) = expected_size {
+            if downloaded_size != expected {
+                // Clean up partial download
+                let _ = tokio::fs::remove_file(&temp_tar).await;
+                return Err(anyhow::anyhow!(
+                    "Partial download detected: expected {} bytes, got {} bytes",
+                    expected,
+                    downloaded_size
+                ));
+            }
+        }
+
+        // Verify file is not empty
+        if downloaded_size == 0 {
+            observability::metrics::increment_artifact_download_errors_total();
+            download_span.record("operation.success", false);
+            download_span.record("error.message", "Downloaded artifact is empty");
+            let _ = tokio::fs::remove_file(&temp_tar).await;
+            return Err(anyhow::anyhow!("Downloaded artifact is empty"));
+        }
+
+        // Record successful download metrics and span
+        let download_duration = download_start.elapsed().as_secs_f64();
+        observability::metrics::observe_artifact_download_duration(download_duration);
+        download_span.record(
+            "operation.duration_ms",
+            download_start.elapsed().as_millis() as u64,
+        );
+        download_span.record("operation.success", true);
+        download_span.record("artifact.size_bytes", downloaded_size);
+
+        // Verify checksum if provided by FluxCD
+        // FluxCD provides digest in artifact status (e.g., "sha256:...")
+        if let Some(digest_str) = status.get("digest").and_then(|d| d.as_str()) {
+            use sha2::{Digest, Sha256};
+            use std::io::Read;
+
+            // Read file and compute SHA256
+            let mut file = std::fs::File::open(&temp_tar)
+                .context("Failed to open downloaded file for checksum verification")?;
+            let mut hasher = Sha256::new();
+            let mut buffer = vec![0u8; 8192];
+            loop {
+                let bytes_read = file.read(&mut buffer)?;
+                if bytes_read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..bytes_read]);
+            }
+            let computed_hash = format!("sha256:{:x}", hasher.finalize());
+
+            // Extract hash from digest (format: "sha256:...")
+            if digest_str != computed_hash {
+                // Clean up invalid artifact
+                let _ = tokio::fs::remove_file(&temp_tar).await;
+                return Err(anyhow::anyhow!(
+                    "Checksum mismatch: expected {}, got {}. Artifact may be corrupt or tampered.",
+                    digest_str,
+                    computed_hash
+                ));
+            }
+            debug!("Checksum verified: {}", digest_str);
+        }
+
+        // Verify file is a valid tar.gz by checking magic bytes
+        // tar.gz files start with gzip magic bytes: 1f 8b
+        // This prevents processing non-tar.gz files that could cause extraction errors
+        let mut magic_buffer = [0u8; 2];
+        if let Ok(mut file) = std::fs::File::open(&temp_tar) {
+            use std::io::Read;
+            if file.read_exact(&mut magic_buffer).is_ok() {
+                if magic_buffer != [0x1f, 0x8b] {
+                    // Clean up invalid file
+                    let _ = tokio::fs::remove_file(&temp_tar).await;
+                    return Err(anyhow::anyhow!(
+                        "Invalid file format: expected tar.gz (gzip), got magic bytes {:02x}{:02x}. File may be corrupt or wrong format.",
+                        magic_buffer[0],
+                        magic_buffer[1]
+                    ));
+                }
+                debug!("File format verified: valid gzip magic bytes");
+            }
+        }
+
+        // Extract tar.gz file with security protections and OTEL spans
+        let extract_span = info_span!(
+            "artifact.extract",
+            artifact.cache_path = cache_path.display().to_string(),
+            artifact.size_bytes = downloaded_size
+        );
+        let extract_start = Instant::now();
+        observability::metrics::increment_artifact_extractions_total();
+
+        info!(
+            "Extracting artifact to {} (size: {} bytes)",
+            cache_path.display(),
+            downloaded_size
+        );
+
+        // Use tar command to extract with security flags:
+        // - --strip-components=0: Preserve directory structure
+        // - --warning=no-unknown-keyword: Suppress warnings for unknown keywords
+        // - -C: Extract to specific directory (prevents path traversal)
+        // Note: tar automatically prevents extraction outside -C directory on most systems
         let extract_output = tokio::process::Command::new("tar")
             .arg("-xzf")
             .arg(&temp_tar)
             .arg("-C")
             .arg(&cache_path)
             .arg("--strip-components=0") // Preserve directory structure
+            .arg("--warning=no-unknown-keyword") // Suppress warnings
             .output()
             .await
             .context("Failed to execute tar command")?;
 
         if !extract_output.status.success() {
             let stderr = String::from_utf8_lossy(&extract_output.stderr);
-            return Err(anyhow::anyhow!("Failed to extract artifact: {}", stderr));
+            observability::metrics::increment_artifact_extraction_errors_total();
+            extract_span.record("operation.success", false);
+            extract_span.record("error.message", stderr.to_string());
+            // Clean up on extraction failure
+            let _ = tokio::fs::remove_file(&temp_tar).await;
+            // Also clean up partial extraction directory
+            let _ = tokio::fs::remove_dir_all(&cache_path).await;
+            return Err(anyhow::anyhow!(
+                "Failed to extract artifact (corrupt or invalid tar.gz): {}",
+                stderr
+            ));
         }
 
-        // Clean up temporary tar file
-        let _ = tokio::fs::remove_file(&temp_tar).await;
+        // Verify extraction succeeded by checking if directory contains files
+        let mut entries = tokio::fs::read_dir(&cache_path)
+            .await
+            .context("Failed to read extracted directory")?;
+        let has_files = entries.next_entry().await?.is_some();
+        if !has_files {
+            observability::metrics::increment_artifact_extraction_errors_total();
+            extract_span.record("operation.success", false);
+            extract_span.record("error.message", "Extraction produced empty directory");
+            // Clean up empty extraction
+            let _ = tokio::fs::remove_file(&temp_tar).await;
+            let _ = tokio::fs::remove_dir_all(&cache_path).await;
+            return Err(anyhow::anyhow!(
+                "Artifact extraction produced empty directory - artifact may be corrupt"
+            ));
+        }
+
+        // Record successful extraction metrics and span
+        let extract_duration = extract_start.elapsed().as_secs_f64();
+        observability::metrics::observe_artifact_extraction_duration(extract_duration);
+        extract_span.record(
+            "operation.duration_ms",
+            extract_start.elapsed().as_millis() as u64,
+        );
+        extract_span.record("operation.success", true);
+
+        // Clean up temporary tar file after successful extraction
+        if let Err(e) = tokio::fs::remove_file(&temp_tar).await {
+            warn!(
+                "Failed to remove temporary tar file {}: {}",
+                temp_tar.display(),
+                e
+            );
+            // Don't fail reconciliation if cleanup fails
+        }
 
         // Clean up old revisions - keep only the 3 newest revisions per namespace/name
         // This prevents disk space from growing unbounded
@@ -2265,6 +2376,21 @@ impl Reconciler {
             }
 
         // Store secrets in cloud provider (GitOps: Git is source of truth)
+        // Get provider name for metrics
+        let provider_name = match &config.spec.provider {
+            ProviderConfig::Gcp(_) => "gcp",
+            ProviderConfig::Aws(_) => "aws",
+            ProviderConfig::Azure(_) => "azure",
+        };
+
+        let publish_span = info_span!(
+            "secrets.publish",
+            provider = provider_name,
+            secret.count = secrets.len(),
+            secret.prefix = secret_prefix
+        );
+        let publish_start = Instant::now();
+
         let mut count = 0;
         let mut updated_count = 0;
 
@@ -2277,6 +2403,7 @@ impl Reconciler {
             match provider.create_or_update_secret(&secret_name, &value).await {
                 Ok(was_updated) => {
                     count += 1;
+                    observability::metrics::increment_secrets_published_total(provider_name, 1);
                     if was_updated {
                         updated_count += 1;
                         info!(
@@ -2286,6 +2413,7 @@ impl Reconciler {
                     }
                 }
                 Err(e) => {
+                    observability::metrics::increment_secrets_skipped_total(provider_name, "error");
                     error!("Failed to store secret {}: {}", secret_name, e);
                     return Err(e.context(format!("Failed to store secret: {secret_name}")));
                 }
@@ -2299,6 +2427,11 @@ impl Reconciler {
                 updated_count
             );
         }
+
+        // Record successful publish metrics and span
+        publish_span.record("operation.duration_ms", publish_start.elapsed().as_millis() as u64);
+        publish_span.record("operation.success", true);
+        publish_span.record("secrets.published", count as u64);
 
         // Store properties - route to config store if enabled, otherwise store as JSON blob in secret store
         if !properties.is_empty() {
@@ -2492,6 +2625,21 @@ impl Reconciler {
         secret_prefix: &str,
     ) -> Result<i32> {
         // Store secrets in cloud provider (GitOps: Git is source of truth)
+        // Get provider name for metrics
+        let provider_name = match &config.spec.provider {
+            ProviderConfig::Gcp(_) => "gcp",
+            ProviderConfig::Aws(_) => "aws",
+            ProviderConfig::Azure(_) => "azure",
+        };
+
+        let publish_span = info_span!(
+            "secrets.publish",
+            provider = provider_name,
+            secret.count = secrets.len(),
+            secret.prefix = secret_prefix
+        );
+        let publish_start = Instant::now();
+
         let mut count = 0;
         let mut updated_count = 0;
 
@@ -2504,6 +2652,7 @@ impl Reconciler {
             match provider.create_or_update_secret(&secret_name, value).await {
                 Ok(was_updated) => {
                     count += 1;
+                    observability::metrics::increment_secrets_published_total(provider_name, 1);
                     if was_updated {
                         updated_count += 1;
                         info!(
@@ -2513,6 +2662,9 @@ impl Reconciler {
                     }
                 }
                 Err(e) => {
+                    observability::metrics::increment_secrets_skipped_total(provider_name, "error");
+                    publish_span.record("operation.success", false);
+                    publish_span.record("error.message", e.to_string());
                     error!("Failed to store secret {}: {}", secret_name, e);
                     return Err(e.context(format!("Failed to store secret: {secret_name}")));
                 }
@@ -2526,6 +2678,14 @@ impl Reconciler {
                 updated_count
             );
         }
+
+        // Record successful publish metrics and span
+        publish_span.record(
+            "operation.duration_ms",
+            publish_start.elapsed().as_millis() as u64,
+        );
+        publish_span.record("operation.success", true);
+        publish_span.record("secrets.published", count as u64);
 
         observability::metrics::increment_secrets_synced(i64::from(count));
         Ok(count)
