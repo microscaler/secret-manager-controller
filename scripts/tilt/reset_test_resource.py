@@ -9,9 +9,9 @@ It handles:
 - Applying multiple test resources from YAML (dev, stage, prod)
 
 Resources managed:
-- test-sops-config (dev): reconcileInterval=1m
-- test-sops-config-stage: reconcileInterval=3m
-- test-sops-config-prod: reconcileInterval=5m
+- test-sops-config (tilt): reconcileInterval=1m (gitops/cluster/env/tilt/)
+- test-sops-config-stage: reconcileInterval=3m (gitops/cluster/env/stage/)
+- test-sops-config-prod: reconcileInterval=5m (gitops/cluster/env/prod/)
 
 By default, the script does NOT delete resources before applying, allowing
 for incremental updates. Use --delete flag for a clean reset.
@@ -51,33 +51,49 @@ Examples:
     crd_yaml_path = Path(controller_dir) / "config/crd/secretmanagerconfig.yaml"
     
     # Define all test resources with their reconcile intervals
+    # Resources are now organized in gitops/cluster/env/{env}/ directories
+    # Each environment includes namespace.yaml, gitrepository.yaml, and secretmanagerconfig.yaml
     test_resources = [
         {
             "name": "test-sops-config",
-            "file": Path("examples/test-sops-config.yaml"),
-            "environment": "dev",
+            "kustomize_path": Path("gitops/cluster/env/tilt"),
+            "namespace": "tilt",
+            "environment": "tilt",
             "reconcile_interval": "1m",
         },
         {
             "name": "test-sops-config-stage",
-            "file": Path("examples/test-sops-config-stage.yaml"),
+            "kustomize_path": Path("gitops/cluster/env/stage"),
+            "namespace": "stage",
             "environment": "stage",
             "reconcile_interval": "3m",
         },
         {
             "name": "test-sops-config-prod",
-            "file": Path("examples/test-sops-config-prod.yaml"),
+            "kustomize_path": Path("gitops/cluster/env/prod"),
+            "namespace": "prod",
             "environment": "prod",
             "reconcile_interval": "5m",
         },
     ]
     
-    # Validate all test resource files exist
-    missing_files = [r for r in test_resources if not r["file"].exists()]
-    if missing_files:
-        print("❌ Error: Test resource YAML files not found:", file=sys.stderr)
-        for resource in missing_files:
-            print(f"   - {resource['file']}", file=sys.stderr)
+    # Validate all test resource kustomize paths exist
+    missing_paths = [r for r in test_resources if not r["kustomize_path"].exists()]
+    if missing_paths:
+        print("❌ Error: Test resource kustomize paths not found:", file=sys.stderr)
+        for resource in missing_paths:
+            print(f"   - {resource['kustomize_path']}", file=sys.stderr)
+        sys.exit(1)
+    
+    # Validate kustomization.yaml exists in each path
+    missing_kustomizations = [
+        r for r in test_resources 
+        if not (r["kustomize_path"] / "kustomization.yaml").exists()
+    ]
+    if missing_kustomizations:
+        print("❌ Error: kustomization.yaml not found in:", file=sys.stderr)
+        for resource in missing_kustomizations:
+            print(f"   - {resource['kustomize_path']}", file=sys.stderr)
         sys.exit(1)
     
     print("🔄 Updating test SecretManagerConfig resources...")
@@ -109,8 +125,10 @@ Examples:
     if args.delete:
         print("📋 Deleting existing test resources (if exist)...")
         for resource in test_resources:
+            # Delete SecretManagerConfig
             delete_result = subprocess.run(
-                ["kubectl", "delete", "secretmanagerconfig", resource["name"], "--ignore-not-found=true"],
+                ["kubectl", "delete", "secretmanagerconfig", resource["name"], 
+                 "-n", resource["namespace"], "--ignore-not-found=true"],
                 capture_output=True,
                 text=True
             )
@@ -133,16 +151,53 @@ Examples:
     for resource in test_resources:
         print(f"║ Resource: {resource['name']:<66} ║")
         print(f"║   Environment: {resource['environment']:<62} ║")
+        print(f"║   Namespace: {resource['namespace']:<62} ║")
         print(f"║   Reconcile Interval: {resource['reconcile_interval']:<58} ║")
         
-        apply_result = subprocess.run(
-            ["kubectl", "apply", "-f", str(resource["file"])],
+        # Apply using kustomize to ensure namespace and all resources are created
+        # First ensure namespace exists, then apply SecretManagerConfig
+        # GitRepository might already exist or require different permissions
+        
+        # Step 1: Apply namespace
+        namespace_file = resource["kustomize_path"] / "namespace.yaml"
+        namespace_result = subprocess.run(
+            ["kubectl", "apply", "-f", str(namespace_file)],
             capture_output=True,
             text=True
         )
         
+        # Step 2: Apply SecretManagerConfig (main resource we care about)
+        secretmanagerconfig_file = resource["kustomize_path"] / "secretmanagerconfig.yaml"
+        apply_result = subprocess.run(
+            ["kubectl", "apply", "-f", str(secretmanagerconfig_file)],
+            capture_output=True,
+            text=True
+        )
+        
+        # Step 3: Try to apply GitRepository (optional - might fail if already exists or no permissions)
+        gitrepository_file = resource["kustomize_path"] / "gitrepository.yaml"
+        gitrepo_result = subprocess.run(
+            ["kubectl", "apply", "-f", str(gitrepository_file)],
+            capture_output=True,
+            text=True
+        )
+        
+        # Success if SecretManagerConfig was applied successfully
+        # GitRepository failure is acceptable (might already exist or require different permissions)
         if apply_result.returncode == 0:
             print(f"║   Status: ✅ Applied successfully{' ' * 50} ║")
+            # Only show GitRepository note if it failed AND it's not a common expected error
+            if gitrepo_result.returncode != 0:
+                gitrepo_error = gitrepo_result.stderr.lower() if gitrepo_result.stderr else ""
+                # Common expected errors that we can safely ignore
+                expected_errors = ["forbidden", "already exists", "unchanged"]
+                if any(err in gitrepo_error for err in expected_errors):
+                    # Don't show note for expected errors - GitRepository might be managed elsewhere
+                    pass
+                else:
+                    # Show unexpected errors
+                    error_msg = gitrepo_result.stderr[:50].replace('\n', ' ')
+                    print(f"║   Note: GitRepository: {error_msg:<54} ║")
         else:
             print(f"║   Status: ❌ Failed (exit code: {apply_result.returncode}){' ' * 40} ║")
             failed_resources.append(resource)
@@ -166,7 +221,7 @@ Examples:
         print("✅ All test resources applied successfully")
         print("📋 Resources:")
         for resource in test_resources:
-            print(f"   - {resource['name']} ({resource['environment']}, reconcileInterval: {resource['reconcile_interval']})")
+            print(f"   - {resource['name']} (namespace: {resource['namespace']}, env: {resource['environment']}, reconcileInterval: {resource['reconcile_interval']})")
 
 
 if __name__ == "__main__":

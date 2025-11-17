@@ -1,0 +1,13 @@
+---
+# Kustomization for Development Environment
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - gitrepository.yaml
+
+# All resources are in the dev namespace:
+# - Namespace: dev (defined in namespace.yaml)
+# - GitRepository: dev (defined in gitrepository.yaml)
+

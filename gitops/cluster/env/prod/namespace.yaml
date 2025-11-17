@@ -1,0 +1,10 @@
+---
+# Namespace for Production Environment
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod
+  labels:
+    environment: prod
+    managed-by: gitops
+

@@ -120,7 +120,7 @@ stringData:
 
 ### 3. Create SecretManagerConfig
 
-See `../sample-secret-manager-config.yaml` for a complete example.
+See `../gitops/cluster/env/tilt/secretmanagerconfig.yaml` for a complete example, or check the [examples directory](../examples/) for different use cases.
 
 ## Testing Locally
 

@@ -1,0 +1,28 @@
+---
+# FluxCD GitRepository for Staging Environment
+# Filters to only include deployment-configuration/profiles/stage/ and .sops.yaml
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: gitrepository-stage
+  namespace: stage
+spec:
+  # Repository URL - UPDATE THIS to your staging GitOps repository
+  url: https://github.com/microscaler/gitops-cluster-stage.git
+  # Branch to watch
+  ref:
+    branch: main
+  # How often to check for updates
+  interval: 5m
+  # Timeout for git operations
+  timeout: 20s
+  # Filter to only include specific paths for this cluster environment
+  # Security: Only include the stage profile directory to prevent config bleed
+  # Using gitignore patterns: ignore everything, then include only what we need
+  ignore: |
+    /*
+    !/deployment-configuration/profiles/stage/**
+    !/.sops.yaml
+   secretRef:
+     name: git-credentials
+

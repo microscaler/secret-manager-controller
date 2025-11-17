@@ -1387,9 +1387,9 @@ See `docs/QUICK_TEST_SOPS.md` for complete testing guide.
 
 ### Example Configurations
 
-- `examples/test-sops-config.yaml` - Example SecretManagerConfig for testing
-- `examples/test-gitrepository-minimal.yaml` - Minimal GitRepository for quick tests
-- `examples/sample-deployment-configuration/` - Sample SOPS-encrypted files
+- `gitops/cluster/env/tilt/` - Complete GitOps setup for tilt environment (GitRepository + SecretManagerConfig)
+- `deployment-configuration/` - Example deployment configuration structure with SOPS-encrypted secrets
+- `examples/` - Additional use-case examples (monolith, single-service, different cloud providers)
 
 ## Related Components
 

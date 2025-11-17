@@ -1,0 +1,10 @@
+---
+# Namespace for Tilt Development Environment
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tilt
+  labels:
+    environment: tilt
+    managed-by: gitops
+

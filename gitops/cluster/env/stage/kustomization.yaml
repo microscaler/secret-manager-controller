@@ -1,0 +1,14 @@
+---
+# Kustomization for Staging Environment
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - gitrepository.yaml
+  - secretmanagerconfig.yaml
+
+# All resources are in the stage namespace:
+# - Namespace: stage (defined in namespace.yaml)
+# - GitRepository: stage (defined in gitrepository.yaml)
+# - SecretManagerConfig: stage (defined in secretmanagerconfig.yaml)
