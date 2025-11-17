@@ -1076,6 +1076,9 @@ async fn main() -> Result<()> {
                             let _error_guard = error_span.enter();
 
                             // Check for specific error types
+                            let is_401 = error_string.contains("401")
+                                || error_string.contains("Unauthorized")
+                                || error_string.contains("WatchFailed");
                             let is_410 = error_string.contains("410")
                                 || error_string.contains("too old resource version")
                                 || error_string.contains("Expired")
@@ -1086,31 +1089,50 @@ async fn main() -> Result<()> {
                             let is_not_found = error_string.contains("ObjectNotFound")
                                 || (error_string.contains("404") && error_string.contains("not found"));
 
-                            if is_410 {
+                            if is_401 {
+                                // Authentication error - RBAC may have been revoked or token expired
+                                error!("❌ Watch authentication failed (401 Unauthorized) - RBAC may have been revoked or token expired");
+                                error!("🔍 SRE Diagnostics:");
+                                error!("   1. Verify ClusterRole 'secret-manager-controller' still exists:");
+                                error!("      kubectl get clusterrole secret-manager-controller");
+                                error!("   2. Verify ClusterRoleBinding still binds ServiceAccount:");
+                                error!("      kubectl get clusterrolebinding secret-manager-controller -o yaml");
+                                error!("   3. Verify ServiceAccount still exists:");
+                                error!("      kubectl get sa secret-manager-controller -n microscaler-system");
+                                error!("   4. Check if pod ServiceAccount token is valid:");
+                                error!("      kubectl get pod -n microscaler-system -l app=secret-manager-controller -o jsonpath='{{{{.spec.serviceAccountName}}}}'");
+                                error!("   5. Verify RBAC permissions are still active:");
+                                error!("      kubectl auth can-i list secretmanagerconfigs --as=system:serviceaccount:microscaler-system:secret-manager-controller --all-namespaces");
+                                error!("   6. If RBAC was recently changed, restart the controller pod:");
+                                error!("      kubectl delete pod -n microscaler-system -l app=secret-manager-controller");
+                                warn!("⏳ Waiting {}s before retrying watch (RBAC may need time to propagate)...", constants::DEFAULT_WATCH_RESTART_DELAY_SECS);
+                                tokio::time::sleep(std::time::Duration::from_secs(constants::DEFAULT_WATCH_RESTART_DELAY_SECS)).await;
+                                None // Filter out to allow restart
+                            } else if is_410 {
                                 // Resource version expired - this is normal during pod restarts
                                 warn!("Watch resource version expired (410) - this is normal during pod restarts, watch will restart");
                                 warn!(error_type = "410", "watch.error.resource_version_expired");
                                 None // Filter out to allow restart
-} else if is_429 {
-    // Storage reinitializing - back off and let it restart
-    let current_backoff = backoff.load(std::sync::atomic::Ordering::Relaxed);
-    warn!("API server storage reinitializing (429), backing off for {}ms before restart...", current_backoff);
-    tokio::time::sleep(std::time::Duration::from_millis(current_backoff)).await;
-    // Exponential backoff, max configured value
-    let new_backoff = std::cmp::min(current_backoff * 2, max_backoff_ms);
-    backoff.store(new_backoff, std::sync::atomic::Ordering::Relaxed);
-    None // Filter out to allow restart
-} else if is_not_found {
-    // Resource not found - this is normal for deleted resources
-    warn!("Resource not found (likely deleted), continuing watch...");
-    Some(x) // Continue - this is expected
-} else {
-    // Other errors - log but continue
-    error!("Controller stream error: {:?}", e);
-    // For unknown errors, wait a bit before restarting
-    tokio::time::sleep(std::time::Duration::from_secs(constants::DEFAULT_WATCH_RESTART_DELAY_SECS)).await;
-    None // Filter out to allow restart
-}
+                            } else if is_429 {
+                                // Storage reinitializing - back off and let it restart
+                                let current_backoff = backoff.load(std::sync::atomic::Ordering::Relaxed);
+                                warn!("API server storage reinitializing (429), backing off for {}ms before restart...", current_backoff);
+                                tokio::time::sleep(std::time::Duration::from_millis(current_backoff)).await;
+                                // Exponential backoff, max configured value
+                                let new_backoff = std::cmp::min(current_backoff * 2, max_backoff_ms);
+                                backoff.store(new_backoff, std::sync::atomic::Ordering::Relaxed);
+                                None // Filter out to allow restart
+                            } else if is_not_found {
+                                // Resource not found - this is normal for deleted resources
+                                warn!("Resource not found (likely deleted), continuing watch...");
+                                Some(x) // Continue - this is expected
+                            } else {
+                                // Other errors - log but continue
+                                error!("Controller stream error: {:?}", e);
+                                // For unknown errors, wait a bit before restarting
+                                tokio::time::sleep(std::time::Duration::from_secs(constants::DEFAULT_WATCH_RESTART_DELAY_SECS)).await;
+                                None // Filter out to allow restart
+                            }
                         }
                     }
                 }
