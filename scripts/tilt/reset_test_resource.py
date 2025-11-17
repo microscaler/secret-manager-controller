@@ -9,9 +9,12 @@ It handles:
 - Applying multiple test resources from YAML (dev, stage, prod)
 
 Resources managed:
-- test-sops-config (tilt): reconcileInterval=1m (gitops/cluster/env/tilt/)
-- test-sops-config-stage: reconcileInterval=3m (gitops/cluster/env/stage/)
-- test-sops-config-prod: reconcileInterval=5m (gitops/cluster/env/prod/)
+- test-sops-config (tilt): reconcileInterval=1m (gitops/cluster/fluxcd/env/tilt/)
+- test-sops-config-stage: reconcileInterval=3m (gitops/cluster/fluxcd/env/stage/)
+- test-sops-config-prod: reconcileInterval=5m (gitops/cluster/fluxcd/env/prod/)
+
+Note: This script manages FluxCD resources. For ArgoCD resources, use:
+  kubectl apply -k gitops/cluster/argocd/env/{env}
 
 By default, the script does NOT delete resources before applying, allowing
 for incremental updates. Use --delete flag for a clean reset.
@@ -51,26 +54,27 @@ Examples:
     crd_yaml_path = Path(controller_dir) / "config/crd/secretmanagerconfig.yaml"
     
     # Define all test resources with their reconcile intervals
-    # Resources are now organized in gitops/cluster/env/{env}/ directories
+    # Resources are now organized in gitops/cluster/fluxcd/env/{env}/ directories
     # Each environment includes namespace.yaml, gitrepository.yaml, and secretmanagerconfig.yaml
+    # Note: ArgoCD resources are in gitops/cluster/argocd/env/{env}/ and managed separately
     test_resources = [
         {
             "name": "test-sops-config",
-            "kustomize_path": Path("gitops/cluster/env/tilt"),
+            "kustomize_path": Path("gitops/cluster/fluxcd/env/tilt"),
             "namespace": "tilt",
             "environment": "tilt",
             "reconcile_interval": "1m",
         },
         {
             "name": "test-sops-config-stage",
-            "kustomize_path": Path("gitops/cluster/env/stage"),
+            "kustomize_path": Path("gitops/cluster/fluxcd/env/stage"),
             "namespace": "stage",
             "environment": "stage",
             "reconcile_interval": "3m",
         },
         {
             "name": "test-sops-config-prod",
-            "kustomize_path": Path("gitops/cluster/env/prod"),
+            "kustomize_path": Path("gitops/cluster/fluxcd/env/prod"),
             "namespace": "prod",
             "environment": "prod",
             "reconcile_interval": "5m",

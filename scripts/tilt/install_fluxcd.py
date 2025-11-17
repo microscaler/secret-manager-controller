@@ -42,6 +42,22 @@ def log_error(msg):
     print(f"[ERROR] {msg}", file=sys.stderr)
 
 
+def clear_namespace_finalizers(namespace):
+    """Clear finalizers from a namespace to allow deletion to proceed."""
+    log_info(f"🔧 Attempting to clear finalizers for namespace '{namespace}'...")
+    
+    # Patch the namespace to remove all finalizers
+    patch_cmd = f"kubectl patch namespace {namespace} -p '{{\"metadata\":{{\"finalizers\":[]}}}}' --type=merge"
+    result = run_command(patch_cmd, check=False, capture_output=True)
+    
+    if result.returncode == 0:
+        log_info(f"✅ Successfully cleared finalizers for namespace '{namespace}'")
+        return True
+    else:
+        log_warn(f"⚠️  Failed to clear finalizers: {result.stderr}")
+        return False
+
+
 def check_flux_cli():
     """Check if flux CLI is installed."""
     result = run_command("which flux", check=False, capture_output=True)
@@ -191,7 +207,7 @@ def install_fluxcd():
         else:
             log_warn(f"⚠️  Failed to configure source-controller for multi-namespace: {patch_result.stderr}")
             log_warn("GitRepositories in non-flux-system namespaces may not be processed")
-            log_warn("See gitops/cluster/env/FLUXCD_MULTI_NAMESPACE.md for manual configuration")
+            log_warn("See gitops/cluster/fluxcd/FLUXCD_MULTI_NAMESPACE.md for manual configuration")
     else:
         if result.returncode == 0 and "--watch-all-namespaces=true" in result.stdout:
             log_info("✅ source-controller already configured to watch all namespaces")
@@ -244,6 +260,8 @@ def main():
     is_installed = check_fluxcd_installed()
     
     # If namespace is terminating, wait for cleanup before proceeding
+    # Note: The script is NOT deleting the namespace - it's detecting that something else
+    # (previous deletion, failed installation, etc.) has already triggered deletion
     ns_result = run_command(
         "kubectl get namespace flux-system -o jsonpath='{.status.phase}'",
         check=False,
@@ -252,11 +270,14 @@ def main():
     
     if ns_result.returncode == 0 and "Terminating" in ns_result.stdout:
         log_warn("⚠️  flux-system namespace is currently terminating")
-        log_warn("   Waiting for namespace cleanup before proceeding...")
+        log_warn("   This was likely triggered by a previous deletion or failed installation")
+        log_warn("   The script is NOT deleting it - waiting for existing deletion to complete...")
         log_info("   This may take a few minutes. Please wait...")
         
         # Wait for namespace to be fully deleted (longer timeout for namespace deletion)
         max_wait = 300  # Wait up to 5 minutes
+        finalizer_clear_attempted = False
+        
         for i in range(max_wait):
             check_result = run_command(
                 "kubectl get namespace flux-system",
@@ -267,13 +288,24 @@ def main():
                 log_info("✅ Namespace cleanup complete")
                 is_installed = False  # Reset since namespace was deleted
                 break
+            
+            # If namespace is still terminating after 60 seconds, try clearing finalizers
+            if i == 60 and not finalizer_clear_attempted:
+                log_warn("⚠️  Namespace still terminating after 60 seconds")
+                log_info("   Attempting to clear finalizers to allow deletion...")
+                if clear_namespace_finalizers("flux-system"):
+                    finalizer_clear_attempted = True
+                    log_info("   Waiting for namespace deletion to complete after clearing finalizers...")
+            
             if i % 30 == 0 and i > 0:
                 log_info(f"   Still waiting... ({i}/{max_wait}s)")
             time.sleep(1)
         else:
             log_error("Timeout waiting for namespace cleanup (5 minutes)")
-            log_error("Please manually delete the flux-system namespace:")
+            log_error("The namespace deletion is stuck even after clearing finalizers.")
+            log_error("You can try force-deleting it:")
             log_error("  kubectl delete namespace flux-system --force --grace-period=0")
+            log_error("Then re-run this script.")
             sys.exit(1)
     
     if is_installed:

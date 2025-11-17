@@ -28,6 +28,21 @@
 //!
 //! # Resume Git pulls
 //! msmctl resume-git-pulls secretmanagerconfig my-secrets
+//!
+//! # Install the controller (similar to flux install)
+//! msmctl install
+//!
+//! # Install to custom namespace
+//! msmctl install --namespace my-namespace
+//!
+//! # Export manifests
+//! msmctl install --export
+//!
+//! # Check installation (similar to flux check)
+//! msmctl check
+//!
+//! # Check prerequisites only
+//! msmctl check --pre
 //! ```
 
 use anyhow::{Context, Result};
@@ -42,6 +57,9 @@ use tokio::time::sleep;
 
 // Use types from the main library to ensure consistency with CRD
 use secret_manager_controller::SecretManagerConfig;
+
+mod check;
+mod install;
 
 /// Microscaler Secret Manager Controller CLI
 #[derive(Parser)]
@@ -184,6 +202,32 @@ enum Commands {
         #[arg(value_name = "NAME")]
         name: String,
     },
+    /// Install the Secret Manager Controller to the cluster
+    /// Similar to `flux install`, this command installs CRDs, RBAC, and deployment manifests
+    Install {
+        /// Kubernetes namespace to install into (default: microscaler-system)
+        #[arg(short, long)]
+        namespace: Option<String>,
+
+        /// Export manifests to stdout instead of applying them
+        #[arg(long)]
+        export: bool,
+
+        /// Dry-run: show what would be installed without applying
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Check the Secret Manager Controller installation
+    /// Similar to `flux check`, this command verifies that the controller is properly installed and healthy
+    Check {
+        /// Kubernetes namespace to check (default: microscaler-system)
+        #[arg(short, long)]
+        namespace: Option<String>,
+
+        /// Only run pre-installation checks (prerequisites)
+        #[arg(long)]
+        pre: bool,
+    },
 }
 
 /// Resource types supported by msmctl
@@ -277,6 +321,12 @@ async fn main() -> Result<()> {
             validate_resource_type(&resource_type)?;
             resume_git_pulls_command(client, name, cli.namespace).await
         }
+        Commands::Install {
+            namespace,
+            export,
+            dry_run,
+        } => install::install_command(client, namespace, export, dry_run).await,
+        Commands::Check { namespace, pre } => check::check_command(client, namespace, pre).await,
     }
 }
 

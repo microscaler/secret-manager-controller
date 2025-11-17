@@ -167,6 +167,23 @@ local_resource(
 )
 
 # ====================
+# ArgoCD Installation
+# ====================
+# Install ArgoCD in the cluster before deploying Applications
+# This ensures Application CRDs and controllers are available
+# Idempotent - can be run multiple times safely
+
+local_resource(
+    'argocd-install',
+    cmd='python3 scripts/tilt/install_argocd.py',
+    deps=[
+        './scripts/tilt/install_argocd.py',
+    ],
+    labels=['infrastructure'],
+    allow_parallel=False,
+)
+
+# ====================
 # Git Credentials Setup
 # ====================
 # Decrypt git credentials from SOPS-encrypted .env file and create Kubernetes secret
@@ -252,22 +269,41 @@ local_resource(
 # Applies GitRepository and other GitOps resources, triggering reconciliation
 # Applied after git-credentials are set up to ensure secret exists if GitRepository references it
 
+# GitOps Activation - FluxCD (default for tilt environment)
 local_resource(
-    'gitops-activate',
-    cmd='kubectl apply -k gitops/cluster/env/tilt',
+    'gitops-activate-fluxcd',
+    cmd='kubectl apply -k gitops/cluster/fluxcd/env/tilt',
     deps=[
-        'gitops/cluster/env/tilt/namespace.yaml',
-        'gitops/cluster/env/tilt/gitrepository.yaml',
-        'gitops/cluster/env/tilt/secretmanagerconfig.yaml',
-        'gitops/cluster/env/tilt/kustomization.yaml',
+        'gitops/cluster/fluxcd/env/tilt/namespace.yaml',
+        'gitops/cluster/fluxcd/env/tilt/gitrepository.yaml',
+        'gitops/cluster/fluxcd/env/tilt/secretmanagerconfig.yaml',
+        'gitops/cluster/fluxcd/env/tilt/kustomization.yaml',
     ],
-    labels=['infrastructure'],
-    resource_deps=['git-credentials-setup'],
+    labels=['infrastructure', 'gitops', 'fluxcd'],
+    resource_deps=['git-credentials-setup', 'fluxcd-install'],
     allow_parallel=False,
 )
 
-# Also load via k8s_yaml for Tilt to track the resource
-k8s_yaml(kustomize('gitops/cluster/env/tilt'))
+# GitOps Activation - ArgoCD (optional, for testing ArgoCD support)
+local_resource(
+    'gitops-activate-argocd',
+    cmd='kubectl apply -k gitops/cluster/argocd/env/tilt',
+    deps=[
+        'gitops/cluster/argocd/env/tilt/namespace.yaml',
+        'gitops/cluster/argocd/env/tilt/application.yaml',
+        'gitops/cluster/argocd/env/tilt/secretmanagerconfig.yaml',
+        'gitops/cluster/argocd/env/tilt/kustomization.yaml',
+    ],
+    labels=['infrastructure', 'gitops', 'argocd'],
+    resource_deps=['git-credentials-setup', 'argocd-install'],
+    allow_parallel=False,
+)
+
+# Also load via k8s_yaml for Tilt to track the resources
+# Note: Both kustomizations include namespace.yaml, so we allow duplicates
+# Kubernetes handles idempotent applies gracefully
+k8s_yaml(kustomize('gitops/cluster/fluxcd/env/tilt'))
+k8s_yaml(kustomize('gitops/cluster/argocd/env/tilt'), allow_duplicates=True)
 
 # ====================
 # Test Resource Management

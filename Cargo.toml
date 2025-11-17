@@ -27,7 +27,7 @@ path = "src/controller/crdgen.rs"
 
 [[bin]]
 name = "msmctl"
-path = "src/cli.rs"
+path = "src/cli/mod.rs"
 
 [[bin]]
 name = "test-sops-decrypt"

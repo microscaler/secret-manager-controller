@@ -37,11 +37,25 @@ use kube::Client;
 use kube_runtime::controller::Action;
 use regex::Regex;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use thiserror::Error;
 use tracing::{debug, error, info, info_span, warn, Instrument};
+
+/// Base directory for Secret Manager Controller cache and artifacts
+/// Cluster owners can mount a PVC at this path for persistent storage
+const SMC_BASE_PATH: &str = "/tmp/smc";
+
+/// Sanitize a string for use in filesystem paths
+/// Replaces characters that are problematic in filenames with safe alternatives
+fn sanitize_path_component(s: &str) -> String {
+    s.replace(['@', '/', ':', '\\', ' ', '\t', '\n', '\r'], "-")
+        .replace("..", "-")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        .collect()
+}
 
 /// Construct secret name with prefix, key, and suffix
 /// Matches kustomize-google-secret-manager naming convention for drop-in replacement
@@ -711,8 +725,9 @@ impl Reconciler {
                 };
 
                 // Extract artifact path from GitRepository status
-                // Path format: /tmp/flux-source-{namespace}-{name}/...
-                match Reconciler::get_flux_artifact_path(&ctx, &git_repo) {
+                // Downloads and extracts tar.gz artifact from FluxCD source-controller
+                // Returns path to extracted directory
+                match Reconciler::get_flux_artifact_path(&ctx, &git_repo).await {
                     Ok(path) => {
                         info!(
                             "Found FluxCD artifact path: {} for GitRepository: {}",
@@ -1181,28 +1196,65 @@ impl Reconciler {
     }
 
     /// Get artifact path from FluxCD GitRepository status
+    /// Downloads and extracts the tar.gz artifact from FluxCD source-controller HTTP service
+    /// Returns the path to the extracted directory
     #[allow(
         clippy::doc_markdown,
         clippy::missing_errors_doc,
         clippy::unused_self,
         reason = "Markdown formatting is intentional, error docs in comments, self needed for trait"
     )]
-    fn get_flux_artifact_path(&self, git_repo: &serde_json::Value) -> Result<PathBuf> {
-        // Extract artifact path from GitRepository status
-        // Flux stores artifacts at: /tmp/flux-source-<namespace>-<name>-<revision>
-        // We can also get it from status.artifact.url or status.artifact.path
-
+    async fn get_flux_artifact_path(&self, git_repo: &serde_json::Value) -> Result<PathBuf> {
+        // Extract artifact information from GitRepository status
+        // FluxCD stores artifacts as tar.gz files accessible via HTTP from source-controller
         let status = git_repo
             .get("status")
             .and_then(|s| s.get("artifact"))
             .context("FluxCD GitRepository has no artifact in status")?;
 
-        // Try to get path from artifact
-        if let Some(path) = status.get("path").and_then(|p| p.as_str()) {
-            return Ok(PathBuf::from(path));
-        }
+        // Get artifact URL - this is the HTTP endpoint to download the tar.gz
+        let artifact_url = status
+            .get("url")
+            .and_then(|u| u.as_str())
+            .context("FluxCD GitRepository artifact has no URL")?;
 
-        // Fallback: construct path from GitRepository metadata
+        // Get revision for caching - use revision to determine if we need to re-download
+        let revision = status
+            .get("revision")
+            .and_then(|r| r.as_str())
+            .unwrap_or("unknown");
+
+        // Extract branch name and short SHA from revision
+        // FluxCD revision format: "main@sha1:7680da431ea59ae7d3f4fdbb903a0f4509da9078"
+        // We need both branch and SHA to avoid conflicts when same SHA exists on different branches
+        let (branch_name, short_sha) = if let Some(at_pos) = revision.find('@') {
+            // Extract branch name (before @)
+            let branch = &revision[..at_pos];
+            let sanitized_branch = sanitize_path_component(branch);
+
+            // Extract SHA (after @sha1: or @sha256:)
+            let sha = if let Some(sha_start) = revision.find("sha1:") {
+                &revision[sha_start + 5..]
+            } else if let Some(sha_start) = revision.find("sha256:") {
+                &revision[sha_start + 7..]
+            } else {
+                // No SHA found, use full revision after @
+                &revision[at_pos + 1..]
+            };
+
+            let short_sha = if sha.len() >= 7 { &sha[..7] } else { sha };
+
+            (sanitized_branch, short_sha.to_string())
+        } else {
+            // No @ separator found, treat entire revision as branch
+            (sanitize_path_component(revision), "unknown".to_string())
+        };
+
+        // Create revision directory name: {branch}-sha-{short_sha}
+        // Example: "main-sha-7680da4" or "old-branch-sha-7680da4"
+        let revision_dir = format!("{}-sha-{}", branch_name, short_sha);
+
+        // Get metadata for constructing cache path
         let metadata = git_repo
             .get("metadata")
             .context("FluxCD GitRepository has no metadata")?;
@@ -1217,10 +1269,171 @@ impl Reconciler {
             .and_then(|n| n.as_str())
             .context("FluxCD GitRepository has no namespace")?;
 
-        // Default Flux artifact path
-        let default_path = format!("/tmp/flux-source-{namespace}-{name}");
-        warn!("Using default FluxCD artifact path: {}", default_path);
-        Ok(PathBuf::from(default_path))
+        // Create hierarchical cache directory path: /tmp/smc/flux-artifact/{namespace}/{name}/{branch}-sha-{short_sha}/
+        // This structure:
+        // 1. Avoids performance issues with many files in a single directory
+        // 2. Allows cluster owners to mount a PVC at /tmp/smc for persistent storage
+        // 3. Provides clear organization by namespace, name, branch, and SHA
+        // 4. Uses branch name + short SHA (7 chars) to avoid conflicts when same SHA exists on different branches
+        // 5. Cleanup uses mtime (filesystem modification time) to determine oldest revisions per branch
+        let sanitized_namespace = sanitize_path_component(namespace);
+        let sanitized_name = sanitize_path_component(name);
+
+        let cache_path = PathBuf::from(SMC_BASE_PATH)
+            .join("flux-artifact")
+            .join(&sanitized_namespace)
+            .join(&sanitized_name)
+            .join(&revision_dir);
+
+        // Check if artifact is already cached (directory exists and is not empty)
+        if cache_path.exists() && cache_path.is_dir() {
+            // Verify cache is valid by checking if it contains files
+            if let Ok(mut entries) = std::fs::read_dir(&cache_path) {
+                if entries.next().is_some() {
+                    info!(
+                        "Using cached FluxCD artifact at {} (revision: {}, dir: {})",
+                        cache_path.display(),
+                        revision,
+                        revision_dir
+                    );
+                    return Ok(cache_path);
+                }
+            }
+        }
+
+        // Download and extract artifact
+        info!(
+            "Downloading FluxCD artifact from {} (revision: {}, dir: {})",
+            artifact_url, revision, revision_dir
+        );
+
+        // Create cache directory
+        tokio::fs::create_dir_all(&cache_path)
+            .await
+            .context(format!(
+                "Failed to create cache directory: {}",
+                cache_path.display()
+            ))?;
+
+        // Download tar.gz file to temporary location
+        let temp_tar = cache_path.join("artifact.tar.gz");
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .context("Failed to create HTTP client")?;
+
+        let response = client
+            .get(artifact_url)
+            .send()
+            .await
+            .context(format!("Failed to download artifact from {}", artifact_url))?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to download artifact: HTTP {}",
+                response.status()
+            ));
+        }
+
+        // Write downloaded content to temporary file
+        let mut file = tokio::fs::File::create(&temp_tar).await.context(format!(
+            "Failed to create temp file: {}",
+            temp_tar.display()
+        ))?;
+
+        let content = response
+            .bytes()
+            .await
+            .context("Failed to read response body")?;
+
+        use tokio::io::AsyncWriteExt;
+        file.write_all(&content)
+            .await
+            .context("Failed to write artifact to file")?;
+
+        drop(file); // Close file before extraction
+
+        // Extract tar.gz file
+        info!("Extracting artifact to {}", cache_path.display());
+
+        // Use tar command to extract (more reliable than Rust tar crate for gzip)
+        let extract_output = tokio::process::Command::new("tar")
+            .arg("-xzf")
+            .arg(&temp_tar)
+            .arg("-C")
+            .arg(&cache_path)
+            .arg("--strip-components=0") // Preserve directory structure
+            .output()
+            .await
+            .context("Failed to execute tar command")?;
+
+        if !extract_output.status.success() {
+            let stderr = String::from_utf8_lossy(&extract_output.stderr);
+            return Err(anyhow::anyhow!("Failed to extract artifact: {}", stderr));
+        }
+
+        // Clean up temporary tar file
+        let _ = tokio::fs::remove_file(&temp_tar).await;
+
+        // Clean up old revisions - keep only the 3 newest revisions per namespace/name
+        // This prevents disk space from growing unbounded
+        if let Err(e) = Self::cleanup_old_revisions(&cache_path.parent().unwrap()).await {
+            warn!("Failed to cleanup old revisions: {}", e);
+            // Don't fail reconciliation if cleanup fails
+        }
+
+        info!(
+            "Successfully downloaded and extracted FluxCD artifact to {} (revision: {}, dir: {})",
+            cache_path.display(),
+            revision,
+            revision_dir
+        );
+
+        Ok(cache_path)
+    }
+
+    /// Clean up old revisions, keeping only the 3 newest per namespace/name combination
+    /// Removes the 4th oldest revision and any older ones to prevent unbounded disk growth
+    async fn cleanup_old_revisions(parent_dir: &Path) -> Result<()> {
+        use std::time::SystemTime;
+
+        // List all revision directories
+        let mut entries = Vec::new();
+        let mut dir_entries = tokio::fs::read_dir(parent_dir)
+            .await
+            .context("Failed to read parent directory for cleanup")?;
+
+        while let Some(entry) = dir_entries.next_entry().await? {
+            let path = entry.path();
+            if path.is_dir() {
+                // Get modification time to determine age
+                let metadata = tokio::fs::metadata(&path).await?;
+                let modified = metadata
+                    .modified()
+                    .unwrap_or_else(|_| SystemTime::UNIX_EPOCH);
+
+                entries.push((path, modified));
+            }
+        }
+
+        // If we have 4 or more revisions, remove the oldest ones (keep 3 newest)
+        if entries.len() >= 4 {
+            // Sort by modification time (newest first)
+            entries.sort_by(|a, b| b.1.cmp(&a.1));
+
+            // Remove all but the 3 newest
+            let to_remove = entries.split_off(3);
+
+            for (path, _) in to_remove {
+                info!("Removing old revision cache: {}", path.display());
+                if let Err(e) = tokio::fs::remove_dir_all(&path).await {
+                    warn!("Failed to remove old revision {}: {}", path.display(), e);
+                    // Continue removing others even if one fails
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Get artifact path from ArgoCD Application
@@ -1277,8 +1490,13 @@ impl Reconciler {
             repo_url, target_revision
         );
 
-        // Clone repository to temporary directory
-        // Use a deterministic path based on Application name/namespace/revision for caching
+        // Clone repository to hierarchical cache directory: /tmp/smc/argocd-repo/{namespace}/{name}/{hash}/
+        // This structure:
+        // 1. Avoids performance issues with many files in a single directory
+        // 2. Allows cluster owners to mount a PVC at /tmp/smc for persistent storage
+        // 3. Uses hash for revision to handle long/branch names safely
+        let sanitized_namespace = sanitize_path_component(&source_ref.namespace);
+        let sanitized_name = sanitize_path_component(&source_ref.name);
         let repo_hash = format!(
             "{:x}",
             md5::compute(format!(
@@ -1286,8 +1504,14 @@ impl Reconciler {
                 source_ref.namespace, source_ref.name, target_revision
             ))
         );
-        let clone_path = format!("/tmp/argocd-repo-{repo_hash}");
-        let path_buf = PathBuf::from(&clone_path);
+
+        let path_buf = PathBuf::from(SMC_BASE_PATH)
+            .join("argocd-repo")
+            .join(&sanitized_namespace)
+            .join(&sanitized_name)
+            .join(&repo_hash);
+
+        let clone_path = path_buf.to_string_lossy().to_string();
 
         // Check if repository already exists and is at the correct revision
         if path_buf.exists() {
@@ -1456,6 +1680,16 @@ impl Reconciler {
                     "Successfully cloned ArgoCD repository to {} (revision: {})",
                     clone_path_for_match, target_revision
                 );
+
+                // Clean up old revisions - keep only the 3 newest revisions per namespace/name
+                // This prevents disk space from growing unbounded
+                if let Err(e) =
+                    Self::cleanup_old_revisions(&path_buf_for_match.parent().unwrap()).await
+                {
+                    warn!("Failed to cleanup old ArgoCD revisions: {}", e);
+                    // Don't fail reconciliation if cleanup fails
+                }
+
                 Ok(path_buf_for_match)
             }
             Err(e) => {

@@ -1,0 +1,15 @@
+---
+# Kustomization for Tilt Development Environment (ArgoCD)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - application.yaml
+  - secretmanagerconfig.yaml
+
+# All resources are in the tilt namespace:
+# - Namespace: tilt (defined in namespace.yaml)
+# - Application: tilt (defined in application.yaml) - ArgoCD source
+# - SecretManagerConfig: tilt (defined in secretmanagerconfig.yaml) - references Application
+

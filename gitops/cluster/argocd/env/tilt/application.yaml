@@ -1,0 +1,22 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: secret-manager-tilt
+  namespace: tilt
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/microscaler/secret-manager-controller.git
+    targetRevision: main
+    path: deployment-configuration/profiles/tilt
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: tilt
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+

@@ -1,5 +1,5 @@
 ---
-# Kustomization for Tilt Development Environment
+# Kustomization for Tilt Development Environment (FluxCD)
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -10,5 +10,5 @@ resources:
 
 # All resources are in the tilt namespace:
 # - Namespace: tilt (defined in namespace.yaml)
-# - GitRepository: tilt (defined in gitrepository.yaml)
-# - SecretManagerConfig: tilt (defined in secretmanagerconfig.yaml)
+# - GitRepository: tilt (defined in gitrepository.yaml) - FluxCD source
+# - SecretManagerConfig: tilt (defined in secretmanagerconfig.yaml) - references GitRepository

@@ -1,0 +1,10 @@
+---
+# Namespace for Staging Environment
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: stage
+  labels:
+    environment: stage
+    managed-by: gitops
+
