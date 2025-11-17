@@ -6,6 +6,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - gitrepository.yaml
+  - secretmanagerconfig.yaml
 
 # All resources are in the dev namespace:
 # - Namespace: dev (defined in namespace.yaml)

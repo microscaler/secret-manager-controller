@@ -1,28 +1,18 @@
 ---
-# FluxCD GitRepository for Development Environment
-# Filters to only include deployment-configuration/profiles/dev/ and .sops.yaml
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository
 metadata:
   name: gitrepository-dev
   namespace: dev
 spec:
-  # Repository URL - UPDATE THIS to your development GitOps repository
   url: https://github.com/microscaler/gitops-cluster-dev.git
-  # Branch to watch
   ref:
     branch: main
-  # How often to check for updates
   interval: 5m
-  # Timeout for git operations
   timeout: 20s
-  # Filter to only include specific paths for this cluster environment
-  # Security: Only include the dev profile directory to prevent config bleed
-  # Using gitignore patterns: ignore everything, then include only what we need
   ignore: |
     /*
     !/deployment-configuration/profiles/dev/**
     !/.sops.yaml
-   secretRef:
-     name: git-credentials
-
+  secretRef:
+    name: git-credentials

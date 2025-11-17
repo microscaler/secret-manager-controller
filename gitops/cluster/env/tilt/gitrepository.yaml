@@ -1,29 +1,19 @@
 ---
-# FluxCD GitRepository for Tilt Development Environment
-# Points to the secret-manager-controller repository for local development
-# Filters to only include deployment-configuration/profiles/tilt/ and .sops.yaml
+
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository
 metadata:
   name: gitrepository-tilt
   namespace: tilt
 spec:
-  # Repository URL - points to the current repository
   url: https://github.com/microscaler/secret-manager-controller.git
-  # Branch to watch
   ref:
     branch: main
-  # How often to check for updates (1 minute for development)
   interval: 1m
-  # Timeout for git operations
   timeout: 20s
-  # Filter to only include specific paths for this cluster environment
-  # Security: Only include the tilt profile directory to prevent config bleed
-  # Using gitignore patterns: ignore everything, then include only what we need
   ignore: |
     /*
     !/deployment-configuration/profiles/tilt/**
     !/.sops.yaml
-   secretRef:
-     name: git-credentials
-
+  secretRef:
+    name: git-credentials

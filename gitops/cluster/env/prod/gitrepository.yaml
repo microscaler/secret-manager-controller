@@ -1,28 +1,18 @@
 ---
-# FluxCD GitRepository for Production Environment
-# Filters to only include deployment-configuration/profiles/prod/ and .sops.yaml
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository
 metadata:
   name: gitrepository-prod
   namespace: prod
 spec:
-  # Repository URL - UPDATE THIS to your production GitOps repository
   url: https://github.com/microscaler/gitops-cluster-prod.git
-  # Branch to watch
   ref:
     branch: main
-  # How often to check for updates (longer interval for production)
   interval: 10m
-  # Timeout for git operations
   timeout: 30s
-  # Filter to only include specific paths for this cluster environment
-  # Security: Only include the prod profile directory to prevent config bleed
-  # Using gitignore patterns: ignore everything, then include only what we need
   ignore: |
     /*
     !/deployment-configuration/profiles/prod/**
     !/.sops.yaml
-   secretRef:
-     name: git-credentials
-
+  secretRef:
+    name: git-credentials
