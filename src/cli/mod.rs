@@ -463,7 +463,9 @@ async fn reconcile_command(
         }
     });
 
-    let patch_params = PatchParams::apply("msmctl").force();
+    // Use Patch::Merge for annotations - simpler and more reliable
+    // Patch::Apply with force() requires full object structure which is complex
+    let patch_params = PatchParams::default();
 
     api.patch(&name, &patch_params, &Patch::Merge(patch))
         .await
@@ -683,7 +685,8 @@ async fn suspend_command(client: Client, name: String, namespace: Option<String>
         }
     });
 
-    let patch_params = PatchParams::apply("msmctl").force();
+    // Use Patch::Merge for spec changes - simpler and more reliable
+    let patch_params = PatchParams::default();
 
     api.patch(&name, &patch_params, &Patch::Merge(patch))
         .await
@@ -725,7 +728,8 @@ async fn resume_command(client: Client, name: String, namespace: Option<String>)
         }
     });
 
-    let patch_params = PatchParams::apply("msmctl").force();
+    // Use Patch::Merge for spec changes - simpler and more reliable
+    let patch_params = PatchParams::default();
 
     api.patch(&name, &patch_params, &Patch::Merge(patch))
         .await
@@ -771,7 +775,8 @@ async fn suspend_git_pulls_command(
         }
     });
 
-    let patch_params = PatchParams::apply("msmctl").force();
+    // Use Patch::Merge for spec changes - simpler and more reliable
+    let patch_params = PatchParams::default();
 
     api.patch(&name, &patch_params, &Patch::Merge(patch))
         .await
@@ -820,7 +825,8 @@ async fn resume_git_pulls_command(
         }
     });
 
-    let patch_params = PatchParams::apply("msmctl").force();
+    // Use Patch::Merge for spec changes - simpler and more reliable
+    let patch_params = PatchParams::default();
 
     api.patch(&name, &patch_params, &Patch::Merge(patch))
         .await
