@@ -143,8 +143,12 @@ custom_build(
     },
     tag='tilt',
     live_update=[
+        # Sync the updated binary into the running container
         sync(ARTIFACT_PATH, '/app/secret-manager-controller'),
-        run('kill -HUP 1', trigger=[ARTIFACT_PATH]),
+        # Restart the container to pick up the new binary
+        # restart_container() is more reliable than kill -HUP for Rust binaries
+        # It ensures the new binary is loaded and the process restarts cleanly
+        restart_container(),
     ],
     skips_local_docker=False,
 )

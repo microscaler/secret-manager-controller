@@ -826,11 +826,32 @@ async fn main() -> Result<()> {
     ));
     let max_backoff_ms = constants::DEFAULT_BACKOFF_MAX_MS;
 
-    // Set up shutdown signal handler - mark server as not ready when SIGTERM received
+    // Set up shutdown signal handler - mark server as not ready when SIGTERM/SIGINT/SIGHUP received
+    // SIGHUP support allows graceful shutdown even if Tilt uses restart_container() (which is preferred)
     let shutdown_server_state = server_state_shutdown.clone();
     tokio::spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
-        info!("Received shutdown signal (SIGINT/SIGTERM), initiating graceful shutdown...");
+        use tokio::signal::unix::{signal, SignalKind};
+
+        // Handle SIGTERM/SIGINT (standard shutdown signals)
+        let ctrl_c = tokio::signal::ctrl_c();
+        // Handle SIGHUP (optional - allows manual hot reload via kill -HUP)
+        let sighup = signal(SignalKind::hangup()).ok();
+
+        tokio::select! {
+            _ = ctrl_c => {
+                info!("Received shutdown signal (SIGINT/SIGTERM), initiating graceful shutdown...");
+            }
+            _ = async {
+                if let Some(mut sig) = sighup {
+                    sig.recv().await
+                } else {
+                    futures::future::pending().await
+                }
+            } => {
+                info!("Received SIGHUP (hot reload), initiating graceful shutdown...");
+            }
+        }
+
         shutdown_server_state
             .is_ready
             .store(false, std::sync::atomic::Ordering::Relaxed);

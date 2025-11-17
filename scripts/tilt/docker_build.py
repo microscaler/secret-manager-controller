@@ -34,16 +34,59 @@ def cleanup_docker_resources():
     
     # Remove dangling images (unused intermediate layers)
     print("  Removing dangling images...")
-    run_command(["docker", "image", "prune", "-f"], check=False)
+    result = run_command(["docker", "image", "prune", "-f"], check=False)
+    if result.stdout:
+        print(f"Total reclaimed space: {result.stdout.strip()}")
     
-    # Remove old build cache (keeps recent cache for faster builds)
+    # Remove old build cache aggressively (keeps only last 1 hour for faster builds)
     print("  Pruning build cache...")
-    run_command(["docker", "builder", "prune", "-f", "--filter", "until=24h"], check=False)
+    result = run_command(["docker", "builder", "prune", "-a", "-f", "--filter", "until=1h"], check=False)
+    if result.stdout:
+        print(f"Total: {result.stdout.strip()}")
     
-    # Remove unused images (not just dangling)
-    # This removes images not used by any container
+    # Remove ALL untagged images (these are old Tilt builds)
+    # These accumulate quickly and take up significant space
+    print("  Removing untagged images (old Tilt builds)...")
+    result = run_command(
+        ["docker", "images", "--filter", "dangling=true", "--format", "{{.ID}}"],
+        check=False
+    )
+    if result.returncode == 0 and result.stdout:
+        image_ids = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+        if image_ids:
+            for img_id in image_ids:
+                run_command(["docker", "rmi", "-f", img_id], check=False)
+            print(f"  Removed {len(image_ids)} untagged image(s)")
+    
+    # Remove old Tilt images (keep only the 2 most recent tagged images)
+    print("  Removing old Tilt images (keeping 2 most recent)...")
+    image_name = os.getenv("IMAGE_NAME", "localhost:5000/secret-manager-controller")
+    # Get all tilt images sorted by creation date (newest first)
+    result = run_command(
+        ["docker", "images", image_name, "--format", "{{.ID}}\t{{.Tag}}\t{{.CreatedAt}}"],
+        check=False
+    )
+    if result.returncode == 0 and result.stdout:
+        lines = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+        # Keep only the 2 most recent images (skip first 2 lines)
+        if len(lines) > 2:
+            old_image_ids = []
+            for line in lines[2:]:  # Skip first 2 (most recent)
+                image_id = line.split('\t')[0]
+                old_image_ids.append(image_id)
+            
+            if old_image_ids:
+                # Remove old images
+                for img_id in old_image_ids:
+                    run_command(["docker", "rmi", "-f", img_id], check=False)
+                print(f"  Removed {len(old_image_ids)} old Tilt image(s)")
+    
+    # Remove unused images (not just dangling) - more aggressive
+    # This removes images not used by any container, older than 1 hour
     print("  Removing unused images...")
-    run_command(["docker", "image", "prune", "-a", "-f", "--filter", "until=24h"], check=False)
+    result = run_command(["docker", "image", "prune", "-a", "-f", "--filter", "until=1h"], check=False)
+    if result.stdout:
+        print(f"Total reclaimed space: {result.stdout.strip()}")
 
 
 def main():
