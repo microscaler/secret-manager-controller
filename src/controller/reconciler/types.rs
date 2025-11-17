@@ -1,0 +1,111 @@
+//! # Types
+//!
+//! Core types for the reconciler.
+
+use crate::controller::backoff::FibonacciBackoff;
+use anyhow::Result;
+use kube::Client;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use thiserror::Error;
+use tokio::sync::Mutex as AsyncMutex;
+
+#[derive(Debug, Error)]
+pub enum ReconcilerError {
+    #[error("Reconciliation failed: {0}")]
+    ReconciliationFailed(#[from] anyhow::Error),
+}
+
+/// Trigger source for reconciliation
+/// Tracks why a reconciliation was triggered for better debugging and observability
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerSource {
+    /// Manual trigger via CLI annotation (msmctl reconcile)
+    ManualCli,
+    /// Timer-based periodic reconciliation (reconcile_interval)
+    TimerBased,
+    /// Error backoff retry (Fibonacci backoff after failure)
+    ErrorBackoff,
+    /// Waiting for resource (GitRepository 404)
+    WaitingForResource,
+    /// Retry after error (generic retry)
+    RetryAfterError,
+}
+
+impl TriggerSource {
+    /// Get human-readable string representation
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TriggerSource::ManualCli => "manual-cli",
+            TriggerSource::TimerBased => "timer-based",
+            TriggerSource::ErrorBackoff => "error-backoff",
+            TriggerSource::WaitingForResource => "waiting-for-resource",
+            TriggerSource::RetryAfterError => "retry-after-error",
+        }
+    }
+}
+
+/// Backoff state for a specific resource
+/// Tracks error count and backoff calculator for progressive retries
+#[derive(Debug, Clone)]
+pub struct BackoffState {
+    pub backoff: FibonacciBackoff,
+    pub error_count: u32,
+}
+
+impl BackoffState {
+    pub fn new() -> Self {
+        Self {
+            backoff: FibonacciBackoff::new(1, 10), // 1 minute min, 10 minutes max (converted to seconds internally)
+            error_count: 0,
+        }
+    }
+
+    pub fn increment_error(&mut self) {
+        self.error_count += 1;
+    }
+
+    pub fn reset(&mut self) {
+        self.error_count = 0;
+        self.backoff.reset();
+    }
+}
+
+#[derive(Clone)]
+pub struct Reconciler {
+    pub client: Client,
+    // Note: secret_manager is created per-reconciliation to support per-resource auth config
+    // In the future, we might want to cache clients per auth config
+    // SOPS private key is wrapped in Arc<AsyncMutex> to allow hot-reloading when secret changes
+    pub sops_private_key: Arc<AsyncMutex<Option<String>>>,
+    // Backoff state per resource (identified by namespace/name)
+    // Moved to error_policy() layer to prevent blocking watch/timer paths
+    pub backoff_states: Arc<Mutex<HashMap<String, BackoffState>>>,
+}
+
+impl std::fmt::Debug for Reconciler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Note: We can't lock the mutex in Debug, so we just indicate if it's set
+        f.debug_struct("Reconciler")
+            .field("sops_private_key", &"***")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Reconciler {
+    pub async fn new(client: Client) -> Result<Self> {
+        // Provider is created per-reconciliation based on provider config
+        // Per-resource auth config is handled in reconcile()
+
+        // Load SOPS private key from Kubernetes secret
+        let sops_private_key =
+            crate::controller::reconciler::sops::load_sops_private_key(&client).await?;
+
+        Ok(Self {
+            client,
+            sops_private_key: Arc::new(AsyncMutex::new(sops_private_key)),
+            backoff_states: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+}

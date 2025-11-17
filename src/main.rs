@@ -45,7 +45,7 @@ pub mod controller;
 pub mod observability;
 pub mod provider;
 
-use controller::reconciler::{Reconciler, TriggerSource};
+use controller::reconciler::{reconcile, Reconciler, TriggerSource};
 use controller::server::{start_server, ServerState};
 
 /// SecretManagerConfig Custom Resource Definition
@@ -654,7 +654,7 @@ async fn main() -> Result<()> {
 
     // Start watching for SOPS private key secret changes
     // This allows hot-reloading the key without restarting the controller
-    Reconciler::start_sops_key_watch(reconciler.clone());
+    controller::reconciler::start_sops_key_watch(reconciler.clone());
 
     // Note: GitRepository and ArgoCD Application changes are handled by the main controller watch.
     // When SecretManagerConfig resources are reconciled, they fetch the latest source,
@@ -763,7 +763,7 @@ async fn main() -> Result<()> {
                     let _resource_guard = resource_span.enter();
 
                     // Startup reconciliation uses timer-based trigger source
-                    match Reconciler::reconcile(
+                    match reconcile(
                         Arc::new(item.clone()),
                         reconciler.clone(),
                         TriggerSource::TimerBased,
@@ -1017,7 +1017,7 @@ async fn main() -> Result<()> {
                             "watch.event.received"
                         );
 
-                        let result = Reconciler::reconcile(obj, reconciler.clone(), trigger_source).await;
+                        let result = reconcile(obj, reconciler.clone(), trigger_source).await;
 
                         match &result {
                             Ok(action) => {
