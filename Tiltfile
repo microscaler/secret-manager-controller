@@ -246,7 +246,7 @@ local_resource(
     deps=[
         'gitops/cluster/argocd/ingress.yaml',
     ],
-    labels=['infrastructure', 'argocd'],
+    labels=['infrastructure',],
     resource_deps=['argocd-install', 'ingress-install'],
     allow_parallel=False,
 )
@@ -366,6 +366,19 @@ local_resource(
 )
 
 # ====================
+# Pact Mode Configuration
+# ====================
+# Pact mode environment variables are applied via kustomize patch
+# See config/kustomization.yaml patches section
+# This routes cloud provider requests to Pact mock servers instead of real APIs
+# Enabled by default for local development/testing without cloud accounts
+#
+# The patch uses Kubernetes service names:
+#   - http://pact-broker.secret-manager-controller-pact-broker.svc.cluster.local:9292
+#
+# To disable Pact mode, remove the patch from config/kustomization.yaml
+
+# ====================
 # GitOps Activation
 # ====================
 # Activate GitOps resources for tilt environment
@@ -382,7 +395,7 @@ local_resource(
         'gitops/cluster/fluxcd/env/tilt/secretmanagerconfig.yaml',
         'gitops/cluster/fluxcd/env/tilt/kustomization.yaml',
     ],
-    labels=['infrastructure', 'gitops', 'fluxcd'],
+    labels=['infrastructure', ],
     resource_deps=['git-credentials-setup', 'fluxcd-install'],
     allow_parallel=False,
 )
@@ -397,7 +410,7 @@ local_resource(
         'gitops/cluster/argocd/env/tilt/secretmanagerconfig.yaml',
         'gitops/cluster/argocd/env/tilt/kustomization.yaml',
     ],
-    labels=['infrastructure', 'gitops', 'argocd'],
+    labels=['infrastructure', ],
     resource_deps=['git-credentials-setup', 'argocd-install'],
     allow_parallel=False,
 )
@@ -429,6 +442,6 @@ local_resource(
         'CONTROLLER_DIR': CONTROLLER_DIR,
     },
     resource_deps=['secret-manager-controller-crd-gen'],
-    labels=['test'],
+    labels=['controllers'],
     allow_parallel=True,
 )
