@@ -2,7 +2,8 @@
 //!
 //! Parse application configuration files (env, yaml, properties).
 
-use crate::controller::parser::sops::{decrypt_sops_content, is_sops_encrypted};
+use crate::controller::parser::sops::error::SopsDecryptionError;
+use crate::controller::parser::sops::{decrypt_sops_content, is_sops_encrypted_impl};
 use crate::controller::parser::types::ApplicationFiles;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -62,11 +63,18 @@ pub(crate) async fn parse_env_file(
 
     // Check if file is SOPS-encrypted
     // SECURITY: Decrypted content exists only in memory, never written to disk
-    let content = if is_sops_encrypted(&content) {
+    let content = if is_sops_encrypted_impl(&content) {
         debug!("Detected SOPS-encrypted file: {}", path.display());
-        decrypt_sops_content(&content, sops_private_key)
+        decrypt_sops_content(&content, Some(path), sops_private_key)
             .await
-            .context("Failed to decrypt SOPS file")?
+            .map_err(|e: SopsDecryptionError| {
+                // Convert SopsDecryptionError to anyhow::Error with context
+                anyhow::anyhow!(
+                    "SOPS decryption failed (reason: {}): {}",
+                    e.reason.as_str(),
+                    e.message
+                )
+            })?
     } else {
         content
     };
@@ -105,11 +113,18 @@ pub(crate) async fn parse_yaml_secrets(
 
     // Check if file is SOPS-encrypted
     // SECURITY: Decrypted content exists only in memory, never written to disk
-    let content = if is_sops_encrypted(&content) {
+    let content = if is_sops_encrypted_impl(&content) {
         debug!("Detected SOPS-encrypted file: {}", path.display());
-        decrypt_sops_content(&content, sops_private_key)
+        decrypt_sops_content(&content, Some(path), sops_private_key)
             .await
-            .context("Failed to decrypt SOPS file")?
+            .map_err(|e: SopsDecryptionError| {
+                // Convert SopsDecryptionError to anyhow::Error with context
+                anyhow::anyhow!(
+                    "SOPS decryption failed (reason: {}): {}",
+                    e.reason.as_str(),
+                    e.message
+                )
+            })?
     } else {
         content
     };

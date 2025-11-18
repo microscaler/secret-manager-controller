@@ -372,6 +372,19 @@ pub struct SecretManagerConfigStatus {
     pub next_reconcile_time: Option<String>,
     #[serde(default)]
     pub secrets_synced: Option<i32>,
+    /// SOPS decryption status
+    /// Values: Success, TransientFailure, PermanentFailure, NotApplicable
+    /// NotApplicable means no SOPS-encrypted files were processed
+    #[serde(default)]
+    pub decryption_status: Option<String>,
+    /// Timestamp of last SOPS decryption attempt (RFC3339)
+    /// Updated whenever a SOPS-encrypted file is processed
+    #[serde(default)]
+    pub last_decryption_attempt: Option<String>,
+    /// Last SOPS decryption error message (if any)
+    /// Only set when decryption fails
+    #[serde(default)]
+    pub last_decryption_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

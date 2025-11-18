@@ -3,6 +3,8 @@
 //! Handles parsing application files and processing Kustomize builds to extract secrets and properties.
 
 use crate::controller::parser;
+use crate::controller::parser::sops::is_sops_encrypted_impl;
+use crate::controller::reconciler::status::update_decryption_status;
 use crate::controller::reconciler::types::Reconciler;
 use crate::controller::reconciler::utils::construct_secret_name;
 use crate::observability;
@@ -13,7 +15,6 @@ use crate::{ProviderConfig, SecretManagerConfig};
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, error, info, info_span, warn, Instrument};
 
 /// Process application files (secrets and properties)
@@ -48,7 +49,92 @@ pub async fn process_application_files(
             let key_guard = reconciler.sops_private_key.lock().await;
             key_guard.clone() // Clone the Option<String> to avoid lifetime issues
         };
-        let secrets = parser::parse_secrets(app_files, sops_private_key.as_deref()).await?;
+
+        // Check if any files are SOPS-encrypted to determine if we need to track decryption status
+        let has_sops_files = {
+            let mut has_sops = false;
+            if let Some(ref path) = app_files.secrets_env {
+                if let Ok(content) = tokio::fs::read_to_string(path).await {
+                    has_sops = is_sops_encrypted_impl(&content);
+                }
+            }
+            if !has_sops {
+                if let Some(ref path) = app_files.secrets_yaml {
+                    if let Ok(content) = tokio::fs::read_to_string(path).await {
+                        has_sops = is_sops_encrypted_impl(&content);
+                    }
+                }
+            }
+            has_sops
+        };
+
+        // Parse secrets - handle SOPS decryption errors with classification
+        let secrets = match parser::parse_secrets(app_files, sops_private_key.as_deref()).await {
+            Ok(secrets) => {
+                // Update decryption status on success (if SOPS files were processed)
+                if has_sops_files {
+                    if let Err(e) = update_decryption_status(
+                        reconciler,
+                        config,
+                        "Success",
+                        None,
+                    )
+                    .await
+                    {
+                        warn!("Failed to update decryption status: {}", e);
+                    }
+                }
+                secrets
+            }
+            Err(e) => {
+                // Check if this is a SOPS decryption error by examining the error chain
+                // If it contains SopsDecryptionError information, extract it
+                let error_msg = e.to_string();
+                let is_transient = error_msg.contains("network_timeout")
+                    || error_msg.contains("provider_unavailable")
+                    || error_msg.contains("permission_denied");
+
+                // Update decryption status
+                if has_sops_files {
+                    let status = if is_transient {
+                        "TransientFailure"
+                    } else {
+                        "PermanentFailure"
+                    };
+                    if let Err(update_err) = update_decryption_status(
+                        reconciler,
+                        config,
+                        status,
+                        Some(&error_msg),
+                    )
+                    .await
+                    {
+                        warn!("Failed to update decryption status: {}", update_err);
+                    }
+                }
+
+                if is_transient {
+                    warn!("SOPS decryption failed (transient): {}. Will retry.", error_msg);
+                    // Return error but mark as transient - reconciler will retry
+                    return Err(anyhow::anyhow!("SOPS decryption failed (transient): {}", error_msg));
+                } else {
+                    error!("SOPS decryption failed (permanent): {}. Action required.", error_msg);
+                    // Extract remediation guidance if available
+                    let remediation = if error_msg.contains("key_not_found") {
+                        "Create SOPS private key secret in the resource namespace"
+                    } else if error_msg.contains("wrong_key") {
+                        "Verify the SOPS private key matches the encryption key used in .sops.yaml"
+                    } else if error_msg.contains("invalid_key_format") {
+                        "Ensure the SOPS private key is in ASCII-armored GPG format"
+                    } else {
+                        "Check controller logs for detailed error message"
+                    };
+                    error!("Remediation: {}", remediation);
+                    // Return error as permanent - reconciler will mark as Failed
+                    return Err(anyhow::anyhow!("SOPS decryption failed (permanent): {}. {}", error_msg, remediation));
+                }
+            }
+        };
         let properties = parser::parse_properties(app_files).await?;
 
         // Debug: Log keys (not values) for debugging

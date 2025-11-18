@@ -120,12 +120,32 @@ pub async fn reload_sops_private_key_from_namespace(
         }
     }
 
-    // Fallback to controller namespace
-    warn!(
-        "SOPS private key not found in namespace {}, falling back to controller namespace",
+    // CRITICAL: SOPS key not found in the resource namespace
+    // This is a configuration error that SREs need to fix immediately
+    // DO NOT silently fall back - this masks configuration problems
+    error!(
+        "🚨 CRITICAL: SOPS private key secret NOT FOUND in namespace '{}'",
         namespace
     );
-    reload_sops_private_key(reconciler).await
+    error!(
+        "🚨 Expected secret names: 'sops-private-key', 'sops-gpg-key', or 'gpg-key' in namespace '{}'",
+        namespace
+    );
+    error!(
+        "🚨 ACTION REQUIRED: Create the SOPS private key secret in namespace '{}' to enable SOPS decryption",
+        namespace
+    );
+    error!("🚨 Secret must contain one of these keys: 'private-key', 'key', or 'gpg-key'");
+    error!(
+        "🚨 This is a configuration error - SOPS decryption will FAIL for resources in namespace '{}'",
+        namespace
+    );
+
+    // Return error instead of falling back - this forces SREs to fix the configuration
+    Err(anyhow::anyhow!(
+        "SOPS private key secret not found in namespace '{}'. Expected one of: 'sops-private-key', 'sops-gpg-key', or 'gpg-key' with key 'private-key', 'key', or 'gpg-key'. This is a configuration error that must be fixed.",
+        namespace
+    ))
 }
 
 /// Verify RBAC is properly configured for SOPS key watch

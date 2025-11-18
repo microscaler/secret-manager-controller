@@ -129,6 +129,19 @@ static SOPS_DECRYPTION_ERRORS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
     .expect("Failed to create SOPS_DECRYPTION_ERRORS_TOTAL metric - this should never happen")
 });
 
+static SOPS_DECRYPTION_ERRORS_TOTAL_BY_REASON: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        prometheus::Opts::new(
+            "secret_manager_sops_decryption_errors_total_by_reason",
+            "Total number of SOPS decryption errors by failure reason",
+        ),
+        &["reason"],
+    )
+    .expect(
+        "Failed to create SOPS_DECRYPTION_ERRORS_TOTAL_BY_REASON metric - this should never happen",
+    )
+});
+
 static KUSTOMIZE_BUILD_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
     IntCounter::new(
         "secret_manager_kustomize_build_total",
@@ -331,6 +344,7 @@ pub fn register_metrics() -> Result<()> {
     REGISTRY.register(Box::new(SOPS_DECRYPTION_TOTAL.clone()))?;
     REGISTRY.register(Box::new(SOPS_DECRYPTION_DURATION.clone()))?;
     REGISTRY.register(Box::new(SOPS_DECRYPTION_ERRORS_TOTAL.clone()))?;
+    REGISTRY.register(Box::new(SOPS_DECRYPTION_ERRORS_TOTAL_BY_REASON.clone()))?;
     REGISTRY.register(Box::new(KUSTOMIZE_BUILD_TOTAL.clone()))?;
     REGISTRY.register(Box::new(KUSTOMIZE_BUILD_DURATION.clone()))?;
     REGISTRY.register(Box::new(KUSTOMIZE_BUILD_ERRORS_TOTAL.clone()))?;
@@ -428,6 +442,14 @@ pub fn observe_sops_decryption_duration(duration: f64) {
 
 pub fn increment_sops_decryption_errors_total() {
     SOPS_DECRYPTION_ERRORS_TOTAL.inc();
+}
+
+/// Increment SOPS decryption errors counter with reason label
+pub fn increment_sops_decryption_errors_total_with_reason(reason: &str) {
+    SOPS_DECRYPTION_ERRORS_TOTAL.inc();
+    SOPS_DECRYPTION_ERRORS_TOTAL_BY_REASON
+        .with_label_values(&[reason])
+        .inc();
 }
 
 pub fn increment_kustomize_build_total() {

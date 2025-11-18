@@ -117,7 +117,7 @@ def main():
         sys.exit(1)
     
     build_result = run_command(
-        ["python3", str(build_script), "--bin", binary_name, "--bin", "crdgen", "--bin", "msmctl", "--bin", "test-sops-decrypt"],
+        ["python3", str(build_script), "--bin", binary_name, "--bin", "crdgen", "--bin", "msmctl", "--bin", "debug-sops"],
         check=False,
         env=build_env
     )

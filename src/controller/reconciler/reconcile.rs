@@ -755,13 +755,47 @@ async fn reconcile_internal(
                     );
                 }
                 Err(e) => {
-                    // Log error but continue processing other services
-                    // This allows partial success when multiple services are configured
-                    error!(
-                        "❌ Failed to process service {}: {}",
-                        app_files.service_name, e
-                    );
-                    observability::metrics::increment_reconciliation_errors();
+                    let error_msg = e.to_string();
+                    // Check if this is a transient SOPS decryption error
+                    let is_transient = error_msg.contains("transient");
+
+                    if is_transient {
+                        // Transient error - log warning and return action to retry
+                        warn!(
+                            "⏳ Transient error processing service {}: {}. Will retry.",
+                            app_files.service_name, error_msg
+                        );
+                        observability::metrics::increment_reconciliation_errors();
+                        // Update status to indicate retry
+                        let _ = update_status_phase(
+                            &ctx,
+                            &config,
+                            "Retrying",
+                            Some(&format!("Transient error: {}. Retrying...", error_msg)),
+                        )
+                        .await;
+                        // Return action to retry after a delay
+                        return Ok(Action::requeue(std::time::Duration::from_secs(30)));
+                    } else {
+                        // Permanent error - log error and continue with other services
+                        // This allows partial success when multiple services are configured
+                        error!(
+                            "❌ Permanent error processing service {}: {}",
+                            app_files.service_name, error_msg
+                        );
+                        observability::metrics::increment_reconciliation_errors();
+                        // Update status to indicate failure for this service
+                        let _ = update_status_phase(
+                            &ctx,
+                            &config,
+                            "PartialFailure",
+                            Some(&format!(
+                                "Failed to process service {}: {}",
+                                app_files.service_name, error_msg
+                            )),
+                        )
+                        .await;
+                    }
                 }
             }
         }

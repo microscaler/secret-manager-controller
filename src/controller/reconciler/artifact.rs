@@ -17,7 +17,7 @@ use tracing::{debug, error, info, info_span, warn, Instrument};
     reason = "Markdown formatting is intentional and error docs are in comments"
 )]
 pub async fn get_flux_git_repository(
-    _reconciler: &Reconciler,
+    reconciler: &Reconciler,
     source_ref: &SourceRef,
 ) -> Result<serde_json::Value> {
     // Use Kubernetes API to get GitRepository
@@ -41,7 +41,7 @@ pub async fn get_flux_git_repository(
         });
 
         let api: kube::Api<DynamicObject> =
-            kube::Api::namespaced_with(_reconciler.client.clone(), &source_ref.namespace, &ar);
+            kube::Api::namespaced_with(reconciler.client.clone(), &source_ref.namespace, &ar);
 
         let git_repo = api.get(&source_ref.name).await.context(format!(
             "Failed to get FluxCD GitRepository: {}/{}",
@@ -65,7 +65,7 @@ pub async fn get_flux_git_repository(
     reason = "Markdown formatting is intentional, error docs in comments"
 )]
 pub async fn get_flux_artifact_path(
-    reconciler: &Reconciler,
+    _reconciler: &Reconciler,
     git_repo: &serde_json::Value,
 ) -> Result<PathBuf> {
     // Extract artifact information from GitRepository status

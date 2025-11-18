@@ -9,6 +9,10 @@
 #
 # Usage: tilt up
 
+# Note: restart_container() is deprecated, but for k8s resources we can use run() to restart
+# The restart_process extension is primarily for docker_build resources
+# For k8s resources, we'll use run() to send a signal or restart the process
+
 # ====================
 # Configuration
 # ====================
@@ -145,10 +149,13 @@ custom_build(
     live_update=[
         # Sync the updated binary into the running container
         sync(ARTIFACT_PATH, '/app/secret-manager-controller'),
-        # Restart the container to pick up the new binary
-        # restart_container() is more reliable than kill -HUP for Rust binaries
-        # It ensures the new binary is loaded and the process restarts cleanly
-        restart_container(),
+        # Restart the process to pick up the new binary
+        # For k8s resources, we use run() to send SIGTERM which triggers graceful shutdown
+        # Kubernetes will automatically restart the pod when the container exits
+        # This replaces the deprecated restart_container() function
+        # Note: The controller handles SIGTERM gracefully and will exit cleanly
+        # run() takes a command string and optional echo_off boolean
+        run('kill -TERM 1'),
     ],
     skips_local_docker=False,
 )

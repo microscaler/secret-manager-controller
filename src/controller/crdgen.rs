@@ -363,6 +363,16 @@ pub struct SecretManagerConfigStatus {
     pub next_reconcile_time: Option<String>,
     #[serde(default)]
     pub secrets_synced: Option<i32>,
+    /// SOPS decryption status
+    /// Values: Success, TransientFailure, PermanentFailure, NotApplicable
+    #[serde(default)]
+    pub decryption_status: Option<String>,
+    /// Timestamp of last SOPS decryption attempt (RFC3339)
+    #[serde(default)]
+    pub last_decryption_attempt: Option<String>,
+    /// Last SOPS decryption error message (if any)
+    #[serde(default)]
+    pub last_decryption_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

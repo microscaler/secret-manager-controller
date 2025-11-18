@@ -5,9 +5,9 @@
 use crate::controller::reconciler::types::Reconciler;
 use crate::controller::reconciler::validation::parse_kubernetes_duration;
 use crate::{Condition, SecretManagerConfig, SecretManagerConfigStatus};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use kube::api::PatchParams;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Update status phase and description
 /// CRITICAL: Checks if status actually changed before updating to prevent unnecessary watch events
@@ -69,6 +69,8 @@ pub async fn update_status_phase(
         })
         .flatten();
 
+    // Preserve existing decryption status fields if they exist
+    let existing_status = config.status.as_ref();
     let status = SecretManagerConfigStatus {
         phase: Some(phase.to_string()),
         description: message.map(|s| s.to_string()),
@@ -77,6 +79,9 @@ pub async fn update_status_phase(
         last_reconcile_time: Some(chrono::Utc::now().to_rfc3339()),
         next_reconcile_time,
         secrets_synced: None,
+        decryption_status: existing_status.and_then(|s| s.decryption_status.clone()),
+        last_decryption_attempt: existing_status.and_then(|s| s.last_decryption_attempt.clone()),
+        last_decryption_error: existing_status.and_then(|s| s.last_decryption_error.clone()),
     };
 
     let patch = serde_json::json!({
@@ -100,30 +105,18 @@ pub async fn update_status(
     config: &SecretManagerConfig,
     secrets_synced: i32,
 ) -> Result<()> {
-    use kube::api::PatchParams;
-
-    // Determine what was synced for the description
-    let is_configs_enabled = config
-        .spec
-        .configs
-        .as_ref()
-        .map(|c| c.enabled)
-        .unwrap_or(false);
-    let description = if is_configs_enabled {
-        format!("Synced {secrets_synced} properties to config store")
-    } else {
-        format!("Synced {secrets_synced} secrets to secret store")
-    };
-
     // CRITICAL: Check if status actually changed before updating
-    // This prevents unnecessary status updates that trigger watch events
-    let current_phase = config.status.as_ref().and_then(|s| s.phase.as_deref());
-    let current_secrets_synced = config.status.as_ref().and_then(|s| s.secrets_synced);
+    let current_secrets_synced = config
+        .status
+        .as_ref()
+        .and_then(|s| s.secrets_synced)
+        .unwrap_or(0);
 
-    // Only update if phase changed (not Ready) or secrets_synced count changed
-    if current_phase == Some("Ready") && current_secrets_synced == Some(secrets_synced) {
+    if current_secrets_synced == secrets_synced
+        && config.status.as_ref().and_then(|s| s.phase.as_deref()) == Some("Ready")
+    {
         debug!(
-            "Skipping status update - already Ready with same secrets_synced count: {}",
+            "Skipping status update - secrets_synced and phase unchanged: secrets_synced={}",
             secrets_synced
         );
         return Ok(());
@@ -134,6 +127,10 @@ pub async fn update_status(
         config.metadata.namespace.as_deref().unwrap_or("default"),
     );
 
+    let description = format!("Successfully synced {} secrets", secrets_synced);
+
+    // Preserve existing decryption status fields if they exist
+    let existing_status = config.status.as_ref();
     let status = SecretManagerConfigStatus {
         phase: Some("Ready".to_string()),
         description: Some(description.clone()),
@@ -157,6 +154,9 @@ pub async fn update_status(
             })
             .flatten(),
         secrets_synced: Some(secrets_synced),
+        decryption_status: existing_status.and_then(|s| s.decryption_status.clone()),
+        last_decryption_attempt: existing_status.and_then(|s| s.last_decryption_attempt.clone()),
+        last_decryption_error: existing_status.and_then(|s| s.last_decryption_error.clone()),
     };
 
     let patch = serde_json::json!({
@@ -173,156 +173,208 @@ pub async fn update_status(
     Ok(())
 }
 
-/// Calculate progressive backoff duration based on error count using Fibonacci sequence
-/// Fibonacci backoff: 1m -> 1m -> 2m -> 3m -> 5m -> 8m -> 13m -> 21m -> 34m -> 55m -> 60m (1 hour max)
-/// This prevents controller overload when parsing errors occur
-/// Each resource maintains its own error count independently
-pub fn calculate_progressive_backoff(error_count: u32) -> std::time::Duration {
-    // Fibonacci sequence for backoff (in minutes): 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, then cap at 60
-    // This provides exponential growth that naturally slows down as errors accumulate
-    let backoff_minutes = match error_count {
-        0 => 1,  // First error: 1 minute
-        1 => 1,  // Second error: 1 minute
-        2 => 2,  // Third error: 2 minutes
-        3 => 3,  // Fourth error: 3 minutes
-        4 => 5,  // Fifth error: 5 minutes
-        5 => 8,  // Sixth error: 8 minutes
-        6 => 13, // Seventh error: 13 minutes
-        7 => 21, // Eighth error: 21 minutes
-        8 => 34, // Ninth error: 34 minutes
-        9 => 55, // Tenth error: 55 minutes
-        _ => 60, // Eleventh+ error: 60 minutes (1 hour max)
-    };
-
-    std::time::Duration::from_secs(backoff_minutes * 60)
-}
-
-/// Get parsing error count from resource annotations
-/// Each resource maintains its own error count independently
-/// Returns the current error count for THIS resource or 0 if not set
-pub fn get_parsing_error_count(config: &SecretManagerConfig) -> u32 {
-    // Each resource has its own annotations, so error counts are per-resource
-    config
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|ann| {
-            ann.get("secret-management.microscaler.io/duration-parsing-errors")
-                .and_then(|v| v.parse::<u32>().ok())
-        })
-        .unwrap_or(0)
-}
-
-/// Increment parsing error count in resource annotations
-/// Each resource maintains its own error count independently
-/// This persists the error count across reconciliations and controller restarts
-pub async fn increment_parsing_error_count(
+/// Update SOPS decryption status
+/// Called when SOPS decryption succeeds or fails to track decryption state
+pub async fn update_decryption_status(
     reconciler: &Reconciler,
     config: &SecretManagerConfig,
-    current_count: u32,
+    status: &str, // "Success", "TransientFailure", "PermanentFailure", "NotApplicable"
+    error_message: Option<&str>,
 ) -> Result<()> {
-    use kube::api::PatchParams;
-
-    // Each resource is patched individually, so error counts are per-resource
     let api: kube::Api<SecretManagerConfig> = kube::Api::namespaced(
         reconciler.client.clone(),
         config.metadata.namespace.as_deref().unwrap_or("default"),
     );
 
-    let new_count = current_count + 1;
+    // Get existing status to preserve other fields
+    let existing_status = config.status.as_ref();
+    let mut new_status = existing_status.cloned().unwrap_or_default();
+
+    // Update decryption fields
+    new_status.decryption_status = Some(status.to_string());
+    new_status.last_decryption_attempt = Some(chrono::Utc::now().to_rfc3339());
+    new_status.last_decryption_error = error_message.map(|s| s.to_string());
+
+    // Preserve other fields
+    if new_status.phase.is_none() {
+        new_status.phase = existing_status.and_then(|s| s.phase.clone());
+    }
+    if new_status.description.is_none() {
+        new_status.description = existing_status.and_then(|s| s.description.clone());
+    }
+    if new_status.conditions.is_empty() {
+        new_status.conditions = existing_status
+            .map(|s| s.conditions.clone())
+            .unwrap_or_default();
+    }
+    if new_status.observed_generation.is_none() {
+        new_status.observed_generation = config.metadata.generation;
+    }
+    if new_status.last_reconcile_time.is_none() {
+        new_status.last_reconcile_time = Some(chrono::Utc::now().to_rfc3339());
+    }
+    if new_status.secrets_synced.is_none() {
+        new_status.secrets_synced = existing_status.and_then(|s| s.secrets_synced);
+    }
+
     let patch = serde_json::json!({
-        "metadata": {
-            "annotations": {
-                "secret-management.microscaler.io/duration-parsing-errors": new_count.to_string()
-            }
-        }
+        "status": new_status
     });
 
-    // Patch THIS specific resource's annotations
-    // Other resources are unaffected
-    api.patch(
+    api.patch_status(
         config.metadata.name.as_deref().unwrap_or("unknown"),
         &PatchParams::apply("secret-manager-controller"),
         &kube::api::Patch::Merge(patch),
     )
     .await?;
 
-    Ok(())
-}
-
-/// Clear parsing error count from resource annotations
-/// Called when parsing succeeds to reset the backoff for THIS resource
-/// Each resource's error count is cleared independently
-pub async fn clear_parsing_error_count(
-    reconciler: &Reconciler,
-    config: &SecretManagerConfig,
-) -> Result<()> {
-    use kube::api::PatchParams;
-
-    // Each resource is patched individually, so clearing is per-resource
-    let api: kube::Api<SecretManagerConfig> = kube::Api::namespaced(
-        reconciler.client.clone(),
+    debug!(
+        "Updated decryption status for SecretManagerConfig {}/{}: {}",
         config.metadata.namespace.as_deref().unwrap_or("default"),
+        config.metadata.name.as_deref().unwrap_or("unknown"),
+        status
     );
 
-    // Only clear if annotation exists for THIS resource
-    if let Some(ann) = &config.metadata.annotations {
-        if ann.contains_key("secret-management.microscaler.io/duration-parsing-errors") {
-            let patch = serde_json::json!({
-                "metadata": {
-                    "annotations": {
-                        "secret-management.microscaler.io/duration-parsing-errors": null
-                    }
-                }
-            });
-
-            // Clear annotation for THIS specific resource only
-            // Other resources' error counts remain unchanged
-            api.patch(
-                config.metadata.name.as_deref().unwrap_or("unknown"),
-                &PatchParams::apply("secret-manager-controller"),
-                &kube::api::Patch::Merge(patch),
-            )
-            .await?;
-        }
-    }
-
     Ok(())
 }
 
-/// Clear manual trigger annotation after reconciliation completes
-/// This prevents the annotation from triggering repeated reconciliations
-/// Called after successful reconciliation when manual trigger was detected
+/// Calculate progressive backoff duration based on error count using Fibonacci sequence
+/// Fibonacci backoff: 1m -> 1m -> 2m -> 3m -> 5m -> 8m -> 13m -> 21m -> 34m -> 55m -> 60m (1 hour max)
+/// This prevents controller overload when parsing errors occur
+/// Each resource maintains its own error count independently
+pub fn calculate_progressive_backoff(error_count: u32) -> std::time::Duration {
+    // Fibonacci sequence for backoff (in minutes): 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, then cap at 60
+    let fib_sequence = [
+        1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765,
+    ]; // in minutes
+    let index = std::cmp::min(error_count as usize, fib_sequence.len() - 1);
+    let minutes = fib_sequence[index];
+    let duration = std::time::Duration::from_secs(minutes * 60); // Convert minutes to seconds
+
+    // Cap at 60 minutes (3600 seconds)
+    std::cmp::min(duration, std::time::Duration::from_secs(3600))
+}
+
+/// Clear the manual trigger annotation from a SecretManagerConfig resource
+/// This prevents repeated manual reconciliations after a successful run
 pub async fn clear_manual_trigger_annotation(
     reconciler: &Reconciler,
     config: &SecretManagerConfig,
 ) -> Result<()> {
-    use kube::api::PatchParams;
+    let name = config.metadata.name.as_deref().unwrap_or("unknown");
+    let namespace = config.metadata.namespace.as_deref().unwrap_or("default");
 
-    let api: kube::Api<SecretManagerConfig> = kube::Api::namespaced(
-        reconciler.client.clone(),
-        config.metadata.namespace.as_deref().unwrap_or("default"),
-    );
+    let api: kube::Api<SecretManagerConfig> =
+        kube::Api::namespaced(reconciler.client.clone(), namespace);
 
-    // Only clear if annotation exists
-    if let Some(ann) = &config.metadata.annotations {
-        if ann.contains_key("secret-management.microscaler.io/reconcile") {
-            let patch = serde_json::json!({
-                "metadata": {
-                    "annotations": {
-                        "secret-management.microscaler.io/reconcile": null
-                    }
-                }
-            });
-
-            api.patch(
-                config.metadata.name.as_deref().unwrap_or("unknown"),
-                &PatchParams::apply("secret-manager-controller"),
-                &kube::api::Patch::Merge(patch),
-            )
-            .await?;
+    // Create a JSON patch to remove the annotation
+    let patch = serde_json::json!({
+        "metadata": {
+            "annotations": {
+                "secret-management.microscaler.io/reconcile": serde_json::Value::Null
+            }
         }
-    }
+    });
 
+    let patch_params = PatchParams::apply("secret-manager-controller").force();
+
+    api.patch(name, &patch_params, &kube::api::Patch::Merge(patch))
+        .await
+        .context(format!(
+            "Failed to clear manual trigger annotation for SecretManagerConfig {}/{}",
+            namespace, name
+        ))?;
+
+    debug!(
+        "Cleared manual trigger annotation for SecretManagerConfig {}/{}",
+        namespace, name
+    );
     Ok(())
+}
+
+/// Clear the parsing error count annotation from a SecretManagerConfig resource
+/// This resets the backoff for duration parsing errors after a successful parse
+pub async fn clear_parsing_error_count(
+    reconciler: &Reconciler,
+    config: &SecretManagerConfig,
+) -> Result<()> {
+    let name = config.metadata.name.as_deref().unwrap_or("unknown");
+    let namespace = config.metadata.namespace.as_deref().unwrap_or("default");
+
+    let api: kube::Api<SecretManagerConfig> =
+        kube::Api::namespaced(reconciler.client.clone(), namespace);
+
+    // Create a JSON patch to remove the annotation
+    let patch = serde_json::json!({
+        "metadata": {
+            "annotations": {
+                "secret-management.microscaler.io/parsing-error-count": serde_json::Value::Null
+            }
+        }
+    });
+
+    let patch_params = PatchParams::apply("secret-manager-controller").force();
+
+    api.patch(name, &patch_params, &kube::api::Patch::Merge(patch))
+        .await
+        .context(format!(
+            "Failed to clear parsing error count annotation for SecretManagerConfig {}/{}",
+            namespace, name
+        ))?;
+
+    debug!(
+        "Cleared parsing error count annotation for SecretManagerConfig {}/{}",
+        namespace, name
+    );
+    Ok(())
+}
+
+/// Increment the parsing error count annotation for a SecretManagerConfig resource
+/// This persists the error count across controller restarts for progressive backoff
+pub async fn increment_parsing_error_count(
+    reconciler: &Reconciler,
+    config: &SecretManagerConfig,
+    current_count: u32,
+) -> Result<()> {
+    let name = config.metadata.name.as_deref().unwrap_or("unknown");
+    let namespace = config.metadata.namespace.as_deref().unwrap_or("default");
+
+    let api: kube::Api<SecretManagerConfig> =
+        kube::Api::namespaced(reconciler.client.clone(), namespace);
+
+    let new_count = current_count + 1;
+    let patch = serde_json::json!({
+        "metadata": {
+            "annotations": {
+                "secret-management.microscaler.io/parsing-error-count": new_count.to_string()
+            }
+        }
+    });
+
+    let patch_params = PatchParams::apply("secret-manager-controller").force();
+
+    api.patch(name, &patch_params, &kube::api::Patch::Merge(patch))
+        .await
+        .context(format!(
+            "Failed to increment parsing error count annotation for SecretManagerConfig {}/{}",
+            namespace, name
+        ))?;
+
+    debug!(
+        "Incremented parsing error count for SecretManagerConfig {}/{} to {}",
+        namespace, name, new_count
+    );
+    Ok(())
+}
+
+/// Get the current parsing error count from a SecretManagerConfig resource's annotations
+/// Returns 0 if annotation is not found or cannot be parsed
+pub fn get_parsing_error_count(config: &SecretManagerConfig) -> u32 {
+    config
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|ann| ann.get("secret-management.microscaler.io/parsing-error-count"))
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0)
 }

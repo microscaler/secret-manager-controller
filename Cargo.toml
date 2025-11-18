@@ -30,8 +30,8 @@ name = "msmctl"
 path = "src/cli/mod.rs"
 
 [[bin]]
-name = "test-sops-decrypt"
-path = "src/bin/test_sops_decrypt.rs"
+name = "debug-sops"
+path = "src/bin/debug-sops.rs"
 
 [dependencies]
 # Kubernetes client

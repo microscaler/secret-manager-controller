@@ -37,14 +37,13 @@ pub use types::ApplicationFiles;
 #[cfg(test)]
 pub use file_finder::normalize_base_path;
 // Note: Test-only functions are pub(crate) and can be imported directly from parsers module
-pub use sops::decrypt_sops_content;
-pub(crate) use sops::is_sops_encrypted;
+pub use sops::{decrypt_sops_content, is_sops_encrypted};
+// Re-export error types for external use
+pub use sops::error::{SopsDecryptionError, SopsDecryptionFailureReason};
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     mod normalize_base_path_tests {
@@ -134,7 +133,7 @@ data:
 
     mod find_application_files_tests {
         use super::super::file_finder::find_application_files;
-        use super::*;
+        use super::{fs, TempDir};
 
         #[tokio::test]
         async fn test_find_application_files_monolith() {
@@ -209,8 +208,7 @@ data:
     mod parse_secrets_tests {
         use super::super::parsers::parse_secrets;
         use super::super::types::ApplicationFiles;
-        use super::*;
-        use std::path::PathBuf;
+        use super::{fs, TempDir};
 
         #[tokio::test]
         async fn test_parse_secrets_env() {
@@ -260,7 +258,8 @@ data:
     mod parse_properties_tests {
         use super::super::parsers::parse_properties;
         use super::super::types::ApplicationFiles;
-        use super::*;
+        use super::{fs, TempDir};
+        use std::path::PathBuf;
 
         #[tokio::test]
         async fn test_parse_properties() {
