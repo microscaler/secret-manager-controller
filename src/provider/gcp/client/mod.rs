@@ -1,12 +1,9 @@
-//! GCP Secret Manager Client Implementations
+//! GCP Secret Manager Client Implementation
 //!
-//! This module provides two implementations of the GCP Secret Manager client:
-//! - **REST Client**: Native REST implementation using reqwest
-//! - **gRPC Client**: Official Google Cloud SDK using gRPC
+//! Native REST implementation using reqwest with rustls.
+//! This avoids SSL/OpenSSL issues present in the official gRPC SDK.
 
 pub mod common;
-pub mod grpc;
 pub mod rest;
 
-pub use grpc::SecretManagerGRPC;
 pub use rest::SecretManagerREST;

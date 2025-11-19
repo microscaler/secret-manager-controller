@@ -5,7 +5,7 @@
 //!
 //! This implementation:
 //! - Works directly with Pact HTTP mock servers
-//! - Avoids gRPC/SSL issues with the official SDK
+//! - Uses reqwest with rustls (no OpenSSL dependencies)
 //! - Easier to troubleshoot and maintain
 //! - Suitable for low-volume use cases
 //!

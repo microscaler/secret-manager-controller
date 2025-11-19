@@ -7,18 +7,14 @@
 //! - Retrieve secret values
 //! - Manage secret versions
 //!
-//! Supports two implementations:
-//! - **REST Client** (recommended): Native REST implementation using reqwest
-//!   - Works directly with Pact HTTP mock servers
-//!   - Avoids gRPC/SSL issues with the official SDK
-//!   - Easier to troubleshoot and maintain
-//!   - Enabled via `GCP_USE_REST` environment variable or when `PACT_MODE=true`
-//! - **gRPC Client**: Official [`google-cloud-secretmanager-v1`] SDK (legacy)
-//!   - Used when REST client is not enabled
-//!   - May have SSL/reqwest compatibility issues
+//! Uses a native REST implementation that:
+//! - Works directly with Pact HTTP mock servers
+//! - Uses reqwest with rustls (no OpenSSL dependencies)
+//! - Easier to troubleshoot and maintain
+//! - Uses reqwest with rustls (no OpenSSL dependencies)
 
 mod client;
-pub use client::{SecretManagerGRPC, SecretManagerREST};
+pub use client::SecretManagerREST;
 
 use crate::provider::SecretManagerProvider;
 use anyhow::Result;
@@ -26,9 +22,7 @@ use tracing::info;
 
 /// Create a GCP Secret Manager provider
 ///
-/// Automatically selects REST or gRPC client based on:
-/// - `GCP_USE_REST` environment variable (explicit choice)
-/// - `PACT_MODE` environment variable (automatically uses REST for Pact compatibility)
+/// Always uses the REST client implementation to avoid SSL/OpenSSL issues.
 ///
 /// # Arguments
 /// - `project_id`: GCP project ID
@@ -42,18 +36,8 @@ pub async fn create_gcp_provider(
     auth_type: Option<&str>,
     service_account_email: Option<&str>,
 ) -> Result<Box<dyn SecretManagerProvider>> {
-    // Use REST client if explicitly requested or if Pact mode is enabled
-    let use_rest = std::env::var("GCP_USE_REST").is_ok() || std::env::var("PACT_MODE").is_ok();
-
-    if use_rest {
-        info!("Using GCP REST client (Pact mode or GCP_USE_REST enabled)");
-        Ok(Box::new(
-            SecretManagerREST::new(project_id, auth_type, service_account_email).await?,
-        ))
-    } else {
-        info!("Using GCP gRPC client (official SDK)");
-        Ok(Box::new(
-            SecretManagerGRPC::new(project_id, auth_type, service_account_email).await?,
-        ))
-    }
+    info!("Using GCP REST client (native implementation)");
+    Ok(Box::new(
+        SecretManagerREST::new(project_id, auth_type, service_account_email).await?,
+    ))
 }

@@ -1,6 +1,6 @@
 //! Common utilities and helpers for GCP Secret Manager clients
 //!
-//! This module contains shared logic between REST and gRPC implementations
+//! This module contains shared logic for the REST implementation
 //! to reduce code duplication and maintain consistency.
 
 use crate::observability::metrics;
