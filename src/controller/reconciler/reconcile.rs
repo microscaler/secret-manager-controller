@@ -19,12 +19,12 @@ use crate::controller::reconciler::types::{Reconciler, ReconcilerError, TriggerS
 use crate::controller::reconciler::validation::{
     parse_kubernetes_duration, validate_duration_interval, validate_secret_manager_config,
 };
+use crate::crd::{ProviderConfig, SecretManagerConfig};
 use crate::observability;
 use crate::provider::aws::AwsSecretManager;
 use crate::provider::azure::AzureKeyVault;
 use crate::provider::gcp::create_gcp_provider;
 use crate::provider::SecretManagerProvider;
-use crate::{ProviderConfig, SecretManagerConfig};
 use anyhow::Context;
 use kube_runtime::controller::Action;
 use std::sync::Arc;

@@ -10,9 +10,9 @@
 //! Azure App Configuration is used for storing configuration values (non-secrets)
 //! and provides better integration with AKS via Azure App Configuration Kubernetes Provider.
 
+use crate::crd::{AzureAuthConfig, AzureConfig};
 use crate::observability::metrics;
 use crate::provider::ConfigStoreProvider;
-use crate::{AzureAuthConfig, AzureConfig};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use azure_core::credentials::{TokenCredential, TokenRequestOptions};

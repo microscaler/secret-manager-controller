@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
 use google_cloud_secretmanager_v1::client::SecretManagerService;
-use tracing::{info, info_span, Instrument};
+use tracing::{debug, info, info_span, Instrument};
 
 use super::common::{
     determine_operation_type, format_secret_path, format_secret_version_path, OperationTracker,
@@ -466,5 +466,83 @@ impl SecretManagerProvider for SecretManagerGRPC {
             .context(format!("Failed to delete GCP secret: {secret_name}"))?;
 
         Ok(())
+    }
+
+    async fn disable_secret(&self, secret_name: &str) -> Result<bool> {
+        use google_cloud_secretmanager_v1::model::DisableSecretVersionRequest;
+
+        info!("Disabling GCP secret: {}", secret_name);
+
+        let secret_name_full = format_secret_path(&self.project_id, secret_name);
+
+        // Get the latest version first
+        let latest_version = self.get_secret_value(secret_name).await?;
+        if latest_version.is_none() {
+            debug!("Secret {} does not exist, cannot disable", secret_name);
+            return Ok(false);
+        }
+
+        // Disable the latest version (this effectively disables the secret for access)
+        let version_path = format!("{}/versions/latest", secret_name_full);
+        let disable_request = DisableSecretVersionRequest::default();
+
+        match self
+            .client
+            .disable_secret_version()
+            .with_request(disable_request.set_name(version_path))
+            .send()
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                let error_msg = e.to_string();
+                if error_msg.contains("not found") || error_msg.contains("404") {
+                    Ok(false)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "Failed to disable GCP secret {secret_name}: {e}"
+                    ))
+                }
+            }
+        }
+    }
+
+    async fn enable_secret(&self, secret_name: &str) -> Result<bool> {
+        use google_cloud_secretmanager_v1::model::EnableSecretVersionRequest;
+
+        info!("Enabling GCP secret: {}", secret_name);
+
+        let secret_name_full = format_secret_path(&self.project_id, secret_name);
+
+        // Get the latest version first
+        let latest_version = self.get_secret_value(secret_name).await?;
+        if latest_version.is_none() {
+            debug!("Secret {} does not exist, cannot enable", secret_name);
+            return Ok(false);
+        }
+
+        // Enable the latest version
+        let version_path = format!("{}/versions/latest", secret_name_full);
+        let enable_request = EnableSecretVersionRequest::default();
+
+        match self
+            .client
+            .enable_secret_version()
+            .with_request(enable_request.set_name(version_path))
+            .send()
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                let error_msg = e.to_string();
+                if error_msg.contains("not found") || error_msg.contains("404") {
+                    Ok(false)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "Failed to enable GCP secret {secret_name}: {e}"
+                    ))
+                }
+            }
+        }
     }
 }

@@ -3,7 +3,7 @@
 //! Handles GitRepository and ArgoCD Application source management.
 
 use crate::controller::reconciler::types::Reconciler;
-use crate::SourceRef;
+use crate::crd::SourceRef;
 use anyhow::{Context, Result};
 use tracing::{debug, info};
 
@@ -14,7 +14,7 @@ use tracing::{debug, info};
 /// This function is a placeholder for future enhancement to directly watch source resources.
 pub fn start_source_watch(
     _reconciler: std::sync::Arc<Reconciler>,
-    _configs_api: kube::Api<crate::SecretManagerConfig>,
+    _configs_api: kube::Api<crate::crd::SecretManagerConfig>,
 ) {
     // Currently, the main controller watch handles SecretManagerConfig changes,
     // and during reconciliation, it fetches the latest GitRepository/Application.

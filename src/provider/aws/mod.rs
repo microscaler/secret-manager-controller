@@ -7,9 +7,9 @@
 //! - Retrieve secret values
 //! - Support IRSA (IAM Roles for Service Accounts) authentication
 
+use crate::crd::{AwsAuthConfig, AwsConfig};
 use crate::observability::metrics;
 use crate::provider::SecretManagerProvider;
-use crate::{AwsAuthConfig, AwsConfig};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use aws_config::SdkConfig;
@@ -351,11 +351,97 @@ impl SecretManagerProvider for AwsSecretManager {
             .context("Failed to delete AWS secret")?;
         Ok(())
     }
+
+    async fn disable_secret(&self, secret_name: &str) -> Result<bool> {
+        info!("Disabling AWS secret: {}", secret_name);
+
+        // AWS doesn't have a direct "disable" operation, but we can mark it for deletion
+        // with a recovery window, which effectively disables it. However, for our use case,
+        // we'll use a different approach: we'll update the secret to mark it as deleted
+        // but with a long recovery window, which makes it inaccessible but recoverable.
+
+        // Check if secret exists
+        let secret_exists = self
+            .client
+            .describe_secret()
+            .secret_id(secret_name)
+            .send()
+            .await
+            .is_ok();
+
+        if !secret_exists {
+            debug!("Secret {} does not exist, cannot disable", secret_name);
+            return Ok(false);
+        }
+
+        // AWS uses DeleteSecret with recovery window to "disable" a secret
+        // For our purposes, we'll use a very long recovery window (7 days default)
+        // This makes the secret inaccessible but not permanently deleted
+        match self
+            .client
+            .delete_secret()
+            .secret_id(secret_name)
+            .recovery_window_in_days(7) // 7 days recovery window
+            .send()
+            .await
+        {
+            Ok(_) => {
+                info!("Marked AWS secret {} for deletion (disabled)", secret_name);
+                Ok(true)
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                // If already deleted/disabled, return false
+                if error_msg.contains("not found") || error_msg.contains("InvalidRequestException")
+                {
+                    Ok(false)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "Failed to disable AWS secret {secret_name}: {e}"
+                    ))
+                }
+            }
+        }
+    }
+
+    async fn enable_secret(&self, secret_name: &str) -> Result<bool> {
+        info!("Enabling AWS secret: {}", secret_name);
+
+        // AWS uses RestoreSecret to re-enable a deleted secret
+        match self
+            .client
+            .restore_secret()
+            .secret_id(secret_name)
+            .send()
+            .await
+        {
+            Ok(_) => {
+                info!("Restored AWS secret {} (enabled)", secret_name);
+                Ok(true)
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                // If secret doesn't exist or is already enabled, return false
+                if error_msg.contains("not found") || error_msg.contains("InvalidRequestException")
+                {
+                    debug!(
+                        "Secret {} does not exist or is already enabled",
+                        secret_name
+                    );
+                    Ok(false)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "Failed to enable AWS secret {secret_name}: {e}"
+                    ))
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{AwsAuthConfig, AwsConfig};
+    use crate::crd::{AwsAuthConfig, AwsConfig};
 
     #[test]
     fn test_aws_config_irsa() {

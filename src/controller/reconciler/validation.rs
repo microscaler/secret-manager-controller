@@ -2,7 +2,7 @@
 //!
 //! Validates SecretManagerConfig resources and duration strings.
 
-use crate::{ProviderConfig, SecretManagerConfig};
+use crate::crd::{ProviderConfig, SecretManagerConfig};
 use anyhow::Result;
 use regex::Regex;
 use std::time::Duration;
@@ -563,7 +563,7 @@ fn validate_aws_region(region: &str) -> Result<()> {
 }
 
 /// Validate configs configuration
-fn validate_configs_config(configs: &crate::ConfigsConfig) -> Result<()> {
+fn validate_configs_config(configs: &crate::crd::ConfigsConfig) -> Result<()> {
     // Validate store type if present
     // ConfigStoreType is an enum, so it's already validated by serde
     // No additional validation needed - enum variants are: SecretManager, ParameterManager
@@ -573,22 +573,26 @@ fn validate_configs_config(configs: &crate::ConfigsConfig) -> Result<()> {
     }
 
     // Validate appConfigEndpoint if present
-    if let Some(ref endpoint) = configs.app_config_endpoint {
+    if let Some(endpoint) = &configs.app_config_endpoint {
         if !endpoint.is_empty() {
             if let Err(e) = validate_url(endpoint, "configs.appConfigEndpoint") {
                 return Err(anyhow::anyhow!(
-                    "Invalid configs.appConfigEndpoint '{endpoint}': {e}"
+                    "Invalid configs.appConfigEndpoint '{}': {}",
+                    endpoint,
+                    e
                 ));
             }
         }
     }
 
     // Validate parameterPath if present
-    if let Some(ref path) = configs.parameter_path {
+    if let Some(path) = &configs.parameter_path {
         if !path.is_empty() {
             if let Err(e) = validate_aws_parameter_path(path, "configs.parameterPath") {
                 return Err(anyhow::anyhow!(
-                    "Invalid configs.parameterPath '{path}': {e}"
+                    "Invalid configs.parameterPath '{}': {}",
+                    path,
+                    e
                 ));
             }
         }

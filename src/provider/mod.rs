@@ -21,6 +21,14 @@ pub trait SecretManagerProvider: Send + Sync {
 
     /// Delete a secret (optional - may not be supported by all providers)
     async fn delete_secret(&self, secret_name: &str) -> Result<()>;
+
+    /// Disable a secret (makes it inaccessible but doesn't delete it)
+    /// Returns true if secret was disabled, false if it was already disabled or doesn't exist
+    async fn disable_secret(&self, secret_name: &str) -> Result<bool>;
+
+    /// Enable a secret (makes it accessible again)
+    /// Returns true if secret was enabled, false if it was already enabled or doesn't exist
+    async fn enable_secret(&self, secret_name: &str) -> Result<bool>;
 }
 
 /// Provider trait for cloud config stores

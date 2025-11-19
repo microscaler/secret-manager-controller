@@ -7,11 +7,11 @@ use crate::controller::parser::sops::is_sops_encrypted_impl;
 use crate::controller::reconciler::status::update_decryption_status;
 use crate::controller::reconciler::types::Reconciler;
 use crate::controller::reconciler::utils::construct_secret_name;
+use crate::crd::{ProviderConfig, SecretManagerConfig};
 use crate::observability;
 use crate::provider::aws::AwsParameterStore;
 use crate::provider::azure::AzureAppConfiguration;
 use crate::provider::{ConfigStoreProvider, SecretManagerProvider};
-use crate::{ProviderConfig, SecretManagerConfig};
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::Instant;
@@ -174,8 +174,8 @@ pub async fn process_application_files(
             key_guard.clone() // Clone the Option<String> to avoid lifetime issues
         };
 
-        // Parse secrets - handle SOPS decryption errors with proper classification
-        let secrets = match parser::parse_secrets(app_files, sops_private_key.as_deref()).await {
+        // Parse secrets with enabled/disabled state - handle SOPS decryption errors with proper classification
+        let parsed_secrets = match parser::parse_secrets_with_state(app_files, sops_private_key.as_deref()).await {
             Ok(secrets) => {
                 // Update decryption status on success (if SOPS files were processed)
                 if has_sops_files {
@@ -251,13 +251,27 @@ pub async fn process_application_files(
         let properties = parser::parse_properties(app_files).await?;
 
         // Debug: Log keys (not values) for debugging
-        if !secrets.is_empty() {
-            let secret_keys: Vec<&String> = secrets.keys().collect();
+        let enabled_count = parsed_secrets.secrets.values().filter(|e| e.enabled).count();
+        let disabled_count = parsed_secrets.secrets.values().filter(|e| !e.enabled).count();
+        if !parsed_secrets.secrets.is_empty() {
+            let enabled_keys: Vec<&String> = parsed_secrets.secrets.iter()
+                .filter(|(_, e)| e.enabled)
+                .map(|(k, _)| k)
+                .collect();
+            let disabled_keys: Vec<&String> = parsed_secrets.secrets.iter()
+                .filter(|(_, e)| !e.enabled)
+                .map(|(k, _)| k)
+                .collect();
             debug!(
-                "📋 Found {} secret key(s) in application.secrets files: {:?}",
-                secret_keys.len(),
-                secret_keys
+                "📋 Found {} enabled and {} disabled secret key(s) in application.secrets files",
+                enabled_count, disabled_count
             );
+            if !enabled_keys.is_empty() {
+                debug!("  Enabled: {:?}", enabled_keys);
+            }
+            if !disabled_keys.is_empty() {
+                debug!("  Disabled: {:?}", disabled_keys);
+            }
         } else {
             debug!("📋 No secrets found in application.secrets files");
         }
@@ -284,36 +298,89 @@ pub async fn process_application_files(
         let publish_span = info_span!(
             "secrets.publish",
             provider = provider_name,
-            secret.count = secrets.len(),
+            secret.count = parsed_secrets.secrets.len(),
             secret.prefix = secret_prefix
         );
         let publish_start = Instant::now();
 
         let mut count = 0;
         let mut updated_count = 0;
+        let mut disabled_count = 0;
+        let mut enabled_count = 0;
 
-        for (key, value) in secrets {
+        // Process all secrets (both enabled and disabled)
+        for (key, entry) in &parsed_secrets.secrets {
             let secret_name = construct_secret_name(
                 Some(secret_prefix),
                 key.as_str(),
                 config.spec.secrets.suffix.as_deref(),
             );
-            match provider.create_or_update_secret(&secret_name, &value).await {
-                Ok(was_updated) => {
-                    count += 1;
-                    observability::metrics::increment_secrets_published_total(provider_name, 1);
-                    if was_updated {
-                        updated_count += 1;
-                        info!(
-                            "Updated secret {} from git (GitOps source of truth)",
-                            secret_name
-                        );
+
+            if entry.enabled {
+                // Enabled secret: create/update as normal, and ensure it's enabled
+                match provider.create_or_update_secret(&secret_name, &entry.value).await {
+                    Ok(was_updated) => {
+                        count += 1;
+                        observability::metrics::increment_secrets_published_total(provider_name, 1);
+                        if was_updated {
+                            updated_count += 1;
+                            info!(
+                                "Updated secret {} from git (GitOps source of truth)",
+                                secret_name
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        observability::metrics::increment_secrets_skipped_total(provider_name, "error");
+                        error!("Failed to store secret {}: {}", secret_name, e);
+                        return Err(e.context(format!("Failed to store secret: {secret_name}")));
                     }
                 }
-                Err(e) => {
-                    observability::metrics::increment_secrets_skipped_total(provider_name, "error");
-                    error!("Failed to store secret {}: {}", secret_name, e);
-                    return Err(e.context(format!("Failed to store secret: {secret_name}")));
+
+                // Ensure secret is enabled (in case it was previously disabled)
+                if let Err(e) = provider.enable_secret(&secret_name).await {
+                    warn!("Failed to enable secret {} (may have been disabled): {}", secret_name, e);
+                    // Don't fail the entire operation, just log a warning
+                } else {
+                    enabled_count += 1;
+                }
+            } else {
+                // Disabled secret: update value if changed, then disable
+                // First, check if secret exists and update value if needed
+                let current_value = provider.get_secret_value(&secret_name).await?;
+                let value_changed = current_value.as_ref().map(|v| v != &entry.value).unwrap_or(true);
+
+                if value_changed {
+                    // Update the value even though it's disabled
+                    // This handles the case: #FOO_SECRET=baz (disabled but value updated)
+                    match provider.create_or_update_secret(&secret_name, &entry.value).await {
+                        Ok(_) => {
+                            debug!("Updated disabled secret {} value from git", secret_name);
+                        }
+                        Err(e) => {
+                            // If secret doesn't exist, that's okay - we'll just disable it when it's created later
+                            if !e.to_string().contains("not found") && !e.to_string().contains("404") {
+                                warn!("Failed to update disabled secret {} value: {}", secret_name, e);
+                            }
+                        }
+                    }
+                }
+
+                // Disable the secret
+                match provider.disable_secret(&secret_name).await {
+                    Ok(was_disabled) => {
+                        if was_disabled {
+                            disabled_count += 1;
+                            info!("Disabled secret {} (commented out in git)", secret_name);
+                        }
+                    }
+                    Err(e) => {
+                        // If secret doesn't exist, that's okay - it's already effectively disabled
+                        if !e.to_string().contains("not found") && !e.to_string().contains("404") {
+                            warn!("Failed to disable secret {}: {}", secret_name, e);
+                            // Don't fail the entire operation, just log a warning
+                        }
+                    }
                 }
             }
         }
@@ -324,6 +391,14 @@ pub async fn process_application_files(
                 "Updated {} secrets from git (GitOps source of truth). Manual changes in cloud provider were overwritten.",
                 updated_count
             );
+        }
+
+        if disabled_count > 0 {
+            info!("Disabled {} secret(s) (commented out in git)", disabled_count);
+        }
+
+        if enabled_count > 0 {
+            info!("Re-enabled {} secret(s) (uncommented in git)", enabled_count);
         }
 
         // Record successful publish metrics and span

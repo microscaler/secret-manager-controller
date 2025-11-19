@@ -4,7 +4,7 @@
 
 use crate::controller::reconciler::types::Reconciler;
 use crate::controller::reconciler::validation::parse_kubernetes_duration;
-use crate::{Condition, SecretManagerConfig, SecretManagerConfigStatus};
+use crate::crd::{Condition, SecretManagerConfig, SecretManagerConfigStatus};
 use anyhow::{Context, Result};
 use kube::api::PatchParams;
 use kube::Api;

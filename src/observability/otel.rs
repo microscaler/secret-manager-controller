@@ -24,7 +24,7 @@ use anyhow::Result;
 use std::time::Duration;
 use tracing::{info, warn};
 
-use crate::OtelConfig;
+use crate::crd::OtelConfig;
 
 /// Tracer provider handle for graceful shutdown
 /// The actual type returned by datadog-opentelemetry is opentelemetry_sdk::trace::SdkTracerProvider

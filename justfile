@@ -101,6 +101,26 @@ test-coverage:
     @cargo test --lib --no-fail-fast
     @echo "📊 Coverage report: target/debug/coverage/"
 
+# Build mock servers for integration tests
+int-build:
+    @echo "🔨 Building mock servers for integration tests..."
+    @cd pact-broker/mock-server && cargo build --release --bins
+    @echo "✅ Mock servers built:"
+    @echo "   - pact-broker/mock-server/target/release/gcp-mock-server"
+    @echo "   - pact-broker/mock-server/target/release/aws-mock-server"
+    @echo "   - pact-broker/mock-server/target/release/azure-mock-server"
+
+# Run controller integration tests with mock servers
+# Note: Requires mock servers to be built (run 'just int-build' first)
+#       and a Kubernetes cluster (kind or existing cluster)
+int-test:
+    @echo "🧪 Running controller integration tests with mock servers..."
+    @echo "⚠️  Note: These tests require:"
+    @echo "   1. Mock servers built (run 'just int-build' first)"
+    @echo "   2. Kubernetes cluster (kind or existing)"
+    @echo "   3. GitRepository resources with artifacts"
+    @cargo test --test integration_controller_mock_servers -- --ignored --test-threads=1
+
 # ============================================================================
 # Code Quality
 # ============================================================================

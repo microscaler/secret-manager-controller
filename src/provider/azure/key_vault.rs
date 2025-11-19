@@ -7,17 +7,19 @@
 //! - Retrieve secret values
 //! - Support Workload Identity and Service Principal authentication
 
+use crate::crd::{AzureAuthConfig, AzureConfig};
 use crate::observability::metrics;
 use crate::provider::SecretManagerProvider;
-use crate::{AzureAuthConfig, AzureConfig};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use azure_core::credentials::{AccessToken, Secret, TokenCredential, TokenRequestOptions};
 use azure_identity::{ManagedIdentityCredential, WorkloadIdentityCredential};
 use azure_security_keyvault_secrets::{models::SetSecretParameters, SecretClient};
+use reqwest::Client as ReqwestClient;
+use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, info, info_span, Instrument};
+use tracing::{debug, info, info_span, warn, Instrument};
 
 /// Mock TokenCredential for Pact testing
 /// Returns a dummy token without attempting real Azure authentication
@@ -47,6 +49,8 @@ impl TokenCredential for MockTokenCredential {
 pub struct AzureKeyVault {
     client: SecretClient,
     _vault_url: String,
+    http_client: ReqwestClient,
+    credential: Arc<dyn TokenCredential>,
 }
 
 impl std::fmt::Debug for AzureKeyVault {
@@ -130,12 +134,18 @@ impl AzureKeyVault {
             }
         };
 
-        let client = SecretClient::new(&vault_url, credential, None)
+        let client = SecretClient::new(&vault_url, credential.clone(), None)
             .context("Failed to create Azure Key Vault SecretClient")?;
+
+        let http_client = ReqwestClient::builder()
+            .build()
+            .context("Failed to create HTTP client")?;
 
         Ok(Self {
             client,
             _vault_url: vault_url,
+            http_client,
+            credential,
         })
     }
 }
@@ -314,11 +324,125 @@ impl SecretManagerProvider for AzureKeyVault {
             .context(format!("Failed to delete Azure secret: {secret_name}"))?;
         Ok(())
     }
+
+    async fn disable_secret(&self, secret_name: &str) -> Result<bool> {
+        info!("Disabling Azure secret: {}", secret_name);
+
+        // Use REST API directly: PATCH /secrets/{name} with attributes.enabled=false
+        // Azure Key Vault REST API: https://learn.microsoft.com/en-us/rest/api/keyvault/secrets/update-secret/update-secret
+
+        // Get access token
+        let scope = &["https://vault.azure.net/.default"];
+        let options = Some(TokenRequestOptions::default());
+        let token_response = self
+            .credential
+            .get_token(scope, options)
+            .await
+            .context("Failed to get Azure Key Vault access token")?;
+        let token = token_response.token.secret().to_string();
+
+        // Construct URL: PATCH {vault_url}/secrets/{name}?api-version=7.4
+        let url = format!("{}secrets/{}?api-version=7.4", self._vault_url, secret_name);
+
+        // Request body: { "attributes": { "enabled": false } }
+        let body = json!({
+            "attributes": {
+                "enabled": false
+            }
+        });
+
+        let response = self
+            .http_client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to disable Azure secret")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+
+            // If secret doesn't exist, return false (not an error)
+            if status == 404 {
+                debug!("Secret {} does not exist, cannot disable", secret_name);
+                return Ok(false);
+            }
+
+            return Err(anyhow::anyhow!(
+                "Failed to disable Azure secret {}: HTTP {} - {}",
+                secret_name,
+                status,
+                error_text
+            ));
+        }
+
+        Ok(true)
+    }
+
+    async fn enable_secret(&self, secret_name: &str) -> Result<bool> {
+        info!("Enabling Azure secret: {}", secret_name);
+
+        // Use REST API directly: PATCH /secrets/{name} with attributes.enabled=true
+        // Azure Key Vault REST API: https://learn.microsoft.com/en-us/rest/api/keyvault/secrets/update-secret/update-secret
+
+        // Get access token
+        let scope = &["https://vault.azure.net/.default"];
+        let options = Some(TokenRequestOptions::default());
+        let token_response = self
+            .credential
+            .get_token(scope, options)
+            .await
+            .context("Failed to get Azure Key Vault access token")?;
+        let token = token_response.token.secret().to_string();
+
+        // Construct URL: PATCH {vault_url}/secrets/{name}?api-version=7.4
+        let url = format!("{}secrets/{}?api-version=7.4", self._vault_url, secret_name);
+
+        // Request body: { "attributes": { "enabled": true } }
+        let body = json!({
+            "attributes": {
+                "enabled": true
+            }
+        });
+
+        let response = self
+            .http_client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to enable Azure secret")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+
+            // If secret doesn't exist, return false (not an error)
+            if status == 404 {
+                debug!("Secret {} does not exist, cannot enable", secret_name);
+                return Ok(false);
+            }
+
+            return Err(anyhow::anyhow!(
+                "Failed to enable Azure secret {}: HTTP {} - {}",
+                secret_name,
+                status,
+                error_text
+            ));
+        }
+
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{AzureAuthConfig, AzureConfig};
+    use crate::crd::{AzureAuthConfig, AzureConfig};
 
     #[test]
     fn test_azure_config_workload_identity() {

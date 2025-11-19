@@ -30,7 +30,10 @@ pub mod types;
 
 // Re-export public API
 pub use file_finder::find_application_files;
-pub use parsers::{parse_properties, parse_secrets, ParseSecretsError};
+pub use parsers::{
+    parse_properties, parse_secrets, parse_secrets_with_state, ParseSecretsError, ParsedSecrets,
+    SecretEntry,
+};
 pub use types::ApplicationFiles;
 
 // Re-export for backward compatibility (used by tests)

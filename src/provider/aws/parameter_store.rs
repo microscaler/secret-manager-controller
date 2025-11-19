@@ -10,9 +10,9 @@
 //! Parameter Store is used for storing configuration values (non-secrets)
 //! and provides better integration with EKS via ASCP (AWS Secrets and Configuration Provider).
 
+use crate::crd::{AwsAuthConfig, AwsConfig};
 use crate::observability::metrics;
 use crate::provider::ConfigStoreProvider;
-use crate::{AwsAuthConfig, AwsConfig};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use aws_config::SdkConfig;
