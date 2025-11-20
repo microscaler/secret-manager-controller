@@ -48,8 +48,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      # Required for making packages public via GitHub API
-      administration: write
     
     strategy:
       matrix:
@@ -141,16 +139,22 @@ jobs:
           FULL_NAME="${{ matrix.image.full_name }}"
           PACKAGE_NAME="${FULL_NAME#ghcr.io/${{ env.REGISTRY_ORG }}/}"
           
-          echo "📦 Making package public: ${PACKAGE_NAME}"
+          echo "📦 Attempting to make package public: ${PACKAGE_NAME}"
           
           # Use GitHub API to set package visibility to public
+          # Note: This requires packages:write permission, which should be sufficient
+          # If this fails, packages can be made public manually via the GitHub UI
           gh api \
             -X PATCH \
             "/orgs/${{ env.REGISTRY_ORG }}/packages/container/${PACKAGE_NAME}" \
             -f visibility=public \
-            || echo "⚠️  Warning: Failed to make package public. You may need to:"
-          echo "   1. Go to https://github.com/orgs/${{ env.REGISTRY_ORG }}/packages/container/${PACKAGE_NAME}/settings"
-          echo "   2. Change visibility to 'Public'"
+            || {
+              echo "⚠️  Warning: Failed to make package public via API"
+              echo "   This may require organization admin permissions"
+              echo "   To make it public manually:"
+              echo "   1. Go to https://github.com/orgs/${{ env.REGISTRY_ORG }}/packages/container/${PACKAGE_NAME}/settings"
+              echo "   2. Change visibility to 'Public'"
+            }
     
       - name: Build summary
         if: always()
