@@ -8,12 +8,6 @@ pub const SMC_BASE_PATH: &str = "/tmp/smc";
 
 /// Sanitize a string for use in filesystem paths
 /// Replaces characters that are problematic in filenames with safe alternatives
-#[cfg(test)]
-pub fn sanitize_path_component(s: &str) -> String {
-    sanitize_path_component_impl(s)
-}
-
-#[cfg(not(test))]
 pub(crate) fn sanitize_path_component(s: &str) -> String {
     sanitize_path_component_impl(s)
 }
@@ -40,17 +34,7 @@ fn sanitize_path_component_impl(s: &str) -> String {
     clippy::doc_markdown,
     reason = "Markdown formatting in doc comments is intentional"
 )]
-#[cfg(test)]
 pub fn construct_secret_name(prefix: Option<&str>, key: &str, suffix: Option<&str>) -> String {
-    construct_secret_name_impl(prefix, key, suffix)
-}
-
-#[cfg(not(test))]
-pub(crate) fn construct_secret_name(
-    prefix: Option<&str>,
-    key: &str,
-    suffix: Option<&str>,
-) -> String {
     construct_secret_name_impl(prefix, key, suffix)
 }
 
@@ -83,13 +67,7 @@ fn construct_secret_name_impl(prefix: Option<&str>, key: &str, suffix: Option<&s
 /// Replaces invalid characters (`.`, `/`, etc.) with `_`
 /// Matches kustomize-google-secret-manager character sanitization behavior
 #[must_use]
-#[cfg(test)]
 pub fn sanitize_secret_name(name: &str) -> String {
-    sanitize_secret_name_impl(name)
-}
-
-#[cfg(not(test))]
-pub(crate) fn sanitize_secret_name(name: &str) -> String {
     sanitize_secret_name_impl(name)
 }
 

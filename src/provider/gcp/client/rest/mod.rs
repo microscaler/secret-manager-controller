@@ -108,7 +108,7 @@ impl SecretManagerREST {
     /// - Metadata server (Workload Identity) - for GKE/GCE
     /// - Service account JSON (GOOGLE_APPLICATION_CREDENTIALS) - for local/dev
     /// - Pact mode - returns dummy token
-    async fn get_access_token() -> Result<String> {
+    pub(crate) async fn get_access_token() -> Result<String> {
         // In Pact mode, use dummy token
         if std::env::var("PACT_MODE").is_ok() {
             debug!("Pact mode: using dummy access token");

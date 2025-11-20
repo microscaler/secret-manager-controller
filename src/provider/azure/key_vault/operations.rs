@@ -1,154 +1,18 @@
-//! # Azure Key Vault Client
+//! # Azure Key Vault Operations
 //!
-//! Client for interacting with Azure Key Vault Secrets API.
-//!
-//! This module provides functionality to:
-//! - Create and update secrets in Azure Key Vault
-//! - Retrieve secret values
-//! - Support Workload Identity and Service Principal authentication
+//! Implements SecretManagerProvider trait for Azure Key Vault.
 
-use crate::crd::{AzureAuthConfig, AzureConfig};
 use crate::observability::metrics;
 use crate::provider::SecretManagerProvider;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use azure_core::credentials::{AccessToken, Secret, TokenCredential, TokenRequestOptions};
-use azure_identity::{ManagedIdentityCredential, WorkloadIdentityCredential};
-use azure_security_keyvault_secrets::{models::SetSecretParameters, SecretClient};
-use reqwest::Client as ReqwestClient;
+use azure_core::credentials::TokenRequestOptions;
+use azure_security_keyvault_secrets::models::SetSecretParameters;
 use serde_json::json;
-use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, info, info_span, warn, Instrument};
+use tracing::{debug, info, info_span, Instrument};
 
-/// Mock TokenCredential for Pact testing
-/// Returns a dummy token without attempting real Azure authentication
-#[derive(Debug)]
-struct MockTokenCredential;
-
-#[async_trait]
-impl TokenCredential for MockTokenCredential {
-    async fn get_token(
-        &self,
-        _scopes: &[&str],
-        _options: Option<TokenRequestOptions<'_>>,
-    ) -> azure_core::Result<AccessToken> {
-        // Return a mock access token for Pact testing
-        // The trait returns AccessToken, which has a .token field of type Secret
-        // AccessToken::new(token: Secret, expires_on: OffsetDateTime)
-        use typespec_client_core::time::{Duration, OffsetDateTime};
-
-        Ok(AccessToken::new(
-            Secret::new("test-token".to_string()),
-            OffsetDateTime::now_utc() + Duration::seconds(3600),
-        ))
-    }
-}
-
-/// Azure Key Vault provider implementation
-pub struct AzureKeyVault {
-    client: SecretClient,
-    _vault_url: String,
-    http_client: ReqwestClient,
-    credential: Arc<dyn TokenCredential>,
-}
-
-impl std::fmt::Debug for AzureKeyVault {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AzureKeyVault")
-            .field("_vault_url", &self._vault_url)
-            .finish_non_exhaustive()
-    }
-}
-
-impl AzureKeyVault {
-    /// Create a new Azure Key Vault client
-    /// Supports both Service Principal and Workload Identity
-    /// # Errors
-    /// Returns an error if Azure client initialization fails
-    #[allow(
-        clippy::missing_errors_doc,
-        clippy::unused_async,
-        reason = "Error docs in comments, async signature matches trait"
-    )]
-    pub async fn new(config: &AzureConfig, _k8s_client: &kube::Client) -> Result<Self> {
-        // Construct vault URL from vault name
-        // Format: https://{vault-name}.vault.azure.net/
-        // Support Pact mock server integration via environment variable
-        let vault_url = if std::env::var("PACT_MODE").is_ok() {
-            // When PACT_MODE=true, use Pact mock server endpoint
-            if let Ok(endpoint) = std::env::var("AZURE_KEY_VAULT_ENDPOINT") {
-                info!(
-                    "Pact mode enabled: routing Azure Key Vault requests to {}",
-                    endpoint
-                );
-                endpoint
-            } else {
-                // Fallback to default if endpoint not set
-                if config.vault_name.starts_with("https://") {
-                    config.vault_name.clone()
-                } else {
-                    format!("https://{}.vault.azure.net/", config.vault_name)
-                }
-            }
-        } else {
-            // Normal mode: use real Azure Key Vault
-            if config.vault_name.starts_with("https://") {
-                config.vault_name.clone()
-            } else {
-                format!("https://{}.vault.azure.net/", config.vault_name)
-            }
-        };
-
-        // Build credential based on authentication method
-        // Only support Workload Identity or Managed Identity (workload identity equivalents)
-        // In Pact mode, use a mock credential that returns a dummy token
-        let credential: Arc<dyn TokenCredential> = if std::env::var("PACT_MODE").is_ok() {
-            // Use mock credential for Pact tests
-            debug!("Pact mode: using mock Azure credential");
-            Arc::new(MockTokenCredential)
-        } else {
-            match &config.auth {
-                Some(AzureAuthConfig::WorkloadIdentity { client_id }) => {
-                    info!(
-                        "Using Azure Workload Identity authentication with client ID: {}",
-                        client_id
-                    );
-                    info!("Ensure pod service account has Azure Workload Identity configured");
-                    let options = azure_identity::WorkloadIdentityCredentialOptions {
-                        client_id: Some(client_id.clone()),
-                        ..Default::default()
-                    };
-                    WorkloadIdentityCredential::new(Some(options))
-                        .context("Failed to create WorkloadIdentityCredential")?
-                }
-                None => {
-                    // Default to Managed Identity (works in Azure environments like AKS)
-                    info!("No auth configuration specified, using Managed Identity");
-                    info!(
-                        "This works automatically in Azure environments (AKS, App Service, etc.)"
-                    );
-                    ManagedIdentityCredential::new(None)
-                        .context("Failed to create ManagedIdentityCredential")?
-                }
-            }
-        };
-
-        let client = SecretClient::new(&vault_url, credential.clone(), None)
-            .context("Failed to create Azure Key Vault SecretClient")?;
-
-        let http_client = ReqwestClient::builder()
-            .build()
-            .context("Failed to create HTTP client")?;
-
-        Ok(Self {
-            client,
-            _vault_url: vault_url,
-            http_client,
-            credential,
-        })
-    }
-}
+use super::AzureKeyVault;
 
 #[async_trait]
 impl SecretManagerProvider for AzureKeyVault {
@@ -437,82 +301,5 @@ impl SecretManagerProvider for AzureKeyVault {
         }
 
         Ok(true)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::crd::{AzureAuthConfig, AzureConfig};
-
-    #[test]
-    fn test_azure_config_workload_identity() {
-        let config = AzureConfig {
-            vault_name: "my-vault".to_string(),
-            auth: Some(AzureAuthConfig::WorkloadIdentity {
-                client_id: "12345678-1234-1234-1234-123456789012".to_string(),
-            }),
-        };
-
-        assert_eq!(config.vault_name, "my-vault");
-        match config.auth {
-            Some(AzureAuthConfig::WorkloadIdentity { client_id }) => {
-                assert_eq!(client_id, "12345678-1234-1234-1234-123456789012");
-            }
-            _ => panic!("Expected WorkloadIdentity auth config"),
-        }
-    }
-
-    #[test]
-    fn test_azure_config_default() {
-        let config = AzureConfig {
-            vault_name: "prod-vault".to_string(),
-            auth: None,
-        };
-
-        assert_eq!(config.vault_name, "prod-vault");
-        assert!(config.auth.is_none());
-    }
-
-    #[test]
-    fn test_azure_vault_url_construction() {
-        // Test vault URL construction
-        let config1 = AzureConfig {
-            vault_name: "my-vault".to_string(),
-            auth: None,
-        };
-        let expected_url = "https://my-vault.vault.azure.net/";
-        // This would be tested in the new() method, but we can test the logic
-        let vault_url = if config1.vault_name.starts_with("https://") {
-            config1.vault_name.clone()
-        } else {
-            format!("https://{}.vault.azure.net/", config1.vault_name)
-        };
-        assert_eq!(vault_url, expected_url);
-
-        // Test with full URL
-        let config2 = AzureConfig {
-            vault_name: "https://custom-vault.vault.azure.net/".to_string(),
-            auth: None,
-        };
-        let vault_url2 = if config2.vault_name.starts_with("https://") {
-            config2.vault_name.clone()
-        } else {
-            format!("https://{}.vault.azure.net/", config2.vault_name)
-        };
-        assert_eq!(vault_url2, "https://custom-vault.vault.azure.net/");
-    }
-
-    #[test]
-    fn test_azure_secret_name_validation() {
-        // Azure Key Vault secret names must be 1-127 characters
-        // Can contain letters, numbers, and hyphens
-        let valid_names = vec!["my-secret", "my-secret-123", "MySecret", "my_secret"];
-
-        for name in valid_names {
-            assert!(
-                !name.is_empty() && name.len() <= 127,
-                "Secret name {name} should be valid"
-            );
-        }
     }
 }

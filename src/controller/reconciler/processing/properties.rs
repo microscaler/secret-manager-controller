@@ -4,10 +4,11 @@
 
 use crate::controller::reconciler::types::Reconciler;
 use crate::controller::reconciler::utils::construct_secret_name;
-use crate::crd::{ProviderConfig, SecretManagerConfig};
+use crate::crd::{ConfigStoreType, ProviderConfig, SecretManagerConfig};
 use crate::observability;
 use crate::provider::aws::AwsParameterStore;
 use crate::provider::azure::AzureAppConfiguration;
+use crate::provider::gcp::create_gcp_parameter_manager_provider;
 use crate::provider::{ConfigStoreProvider, SecretManagerProvider};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -44,29 +45,117 @@ pub async fn store_properties(
 
         // Route to appropriate config store based on provider
         match &config.spec.provider {
-            ProviderConfig::Gcp(_gcp_config) => {
-                // For GCP, reuse Secret Manager provider (store configs as individual secrets)
-                // This is an interim solution until Parameter Manager support is contributed to ESO
-                for (key, value) in properties {
-                    let config_name = construct_secret_name(
-                        Some(secret_prefix),
-                        key.as_str(),
-                        config.spec.secrets.suffix.as_deref(),
-                    );
-                    match provider.create_or_update_secret(&config_name, &value).await {
-                        Ok(was_updated) => {
-                            config_count += 1;
-                            if was_updated {
-                                config_updated_count += 1;
-                                info!(
-                                    "Updated config {} from git (GitOps source of truth)",
-                                    config_name
+            ProviderConfig::Gcp(gcp_config) => {
+                // Check if Parameter Manager is configured
+                let use_parameter_manager = config
+                    .spec
+                    .configs
+                    .as_ref()
+                    .and_then(|c| c.store.as_ref())
+                    .map(|store| matches!(store, ConfigStoreType::ParameterManager))
+                    .unwrap_or(false);
+
+                if use_parameter_manager {
+                    // Use Parameter Manager for configs
+                    info!("Using GCP Parameter Manager for configs");
+
+                    // Extract auth config similar to how it's done in provider.rs
+                    let (auth_type, service_account_email_owned) =
+                        if let Some(ref auth_config) = gcp_config.auth {
+                            match serde_json::to_value(auth_config)
+                                .context("Failed to serialize gcpAuth config")
+                            {
+                                Ok(auth_json) => {
+                                    let auth_type_str =
+                                        auth_json.get("authType").and_then(|t| t.as_str());
+                                    if let Some("WorkloadIdentity") = auth_type_str {
+                                        match auth_json
+                                            .get("serviceAccountEmail")
+                                            .and_then(|e| e.as_str())
+                                        {
+                                            Some(email) => {
+                                                (Some("WorkloadIdentity"), Some(email.to_string()))
+                                            }
+                                            None => (Some("WorkloadIdentity"), None),
+                                        }
+                                    } else {
+                                        (Some("WorkloadIdentity"), None)
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to serialize GCP auth config: {}", e);
+                                    return Err(anyhow::anyhow!(
+                                        "Failed to serialize GCP auth config: {}",
+                                        e
+                                    ));
+                                }
+                            }
+                        } else {
+                            (Some("WorkloadIdentity"), None)
+                        };
+
+                    let param_provider = create_gcp_parameter_manager_provider(
+                        gcp_config.project_id.clone(),
+                        auth_type,
+                        service_account_email_owned.as_deref(),
+                    )
+                    .await
+                    .context("Failed to create GCP Parameter Manager provider")?;
+
+                    for (key, value) in properties {
+                        let config_name = construct_secret_name(
+                            Some(secret_prefix),
+                            key.as_str(),
+                            config.spec.secrets.suffix.as_deref(),
+                        );
+                        match param_provider
+                            .create_or_update_config(&config_name, &value)
+                            .await
+                        {
+                            Ok(was_updated) => {
+                                config_count += 1;
+                                if was_updated {
+                                    config_updated_count += 1;
+                                    info!(
+                                        "Updated config {} in Parameter Manager (GitOps source of truth)",
+                                        config_name
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to store config {}: {}", config_name, e);
+                                return Err(
+                                    e.context(format!("Failed to store config: {config_name}"))
                                 );
                             }
                         }
-                        Err(e) => {
-                            error!("Failed to store config {}: {}", config_name, e);
-                            return Err(e.context(format!("Failed to store config: {config_name}")));
+                    }
+                } else {
+                    // Default: reuse Secret Manager provider (store configs as individual secrets)
+                    // This maintains backward compatibility
+                    for (key, value) in properties {
+                        let config_name = construct_secret_name(
+                            Some(secret_prefix),
+                            key.as_str(),
+                            config.spec.secrets.suffix.as_deref(),
+                        );
+                        match provider.create_or_update_secret(&config_name, &value).await {
+                            Ok(was_updated) => {
+                                config_count += 1;
+                                if was_updated {
+                                    config_updated_count += 1;
+                                    info!(
+                                        "Updated config {} from git (GitOps source of truth)",
+                                        config_name
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to store config {}: {}", config_name, e);
+                                return Err(
+                                    e.context(format!("Failed to store config: {config_name}"))
+                                );
+                            }
                         }
                     }
                 }

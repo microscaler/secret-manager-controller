@@ -15,9 +15,10 @@ use axum::{
     extract::{Path, State},
     http::{Method, StatusCode, Uri},
     response::{IntoResponse, Json, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
+// Use std::time for timestamp generation instead of chrono
 // base64 encoding is handled by the secret store
 use pact_mock_server::{
     auth_failure_middleware, health_check, load_contracts_from_broker, logging_middleware,
@@ -26,7 +27,7 @@ use pact_mock_server::{
 };
 use pact_mock_server::secrets::common::errors::gcp_error_response;
 use pact_mock_server::secrets::common::limits::validate_gcp_secret_size;
-use pact_mock_server::secrets::gcp::GcpSecretStore;
+use pact_mock_server::secrets::gcp::{GcpParameterStore, GcpSecretStore};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::env;
@@ -62,6 +63,7 @@ struct GcpAppState {
     #[allow(dead_code)] // Reserved for future contract-based responses
     contracts: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, serde_json::Value>>>,
     secrets: GcpSecretStore,
+    parameters: GcpParameterStore,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -95,6 +97,82 @@ struct SecretResponse {
     /// GCP includes this in version responses
     #[serde(skip_serializing_if = "Option::is_none")]
     create_time: Option<String>, // RFC3339 format
+    /// Labels for the secret (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    labels: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListSecretsResponse {
+    secrets: Vec<SecretResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_size: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateSecretRequest {
+    /// The secret resource with updated fields
+    secret: UpdateSecretSpec,
+    /// A comma-separated list of the names of fields to update.
+    /// E.g., "labels", "replication"
+    #[serde(rename = "updateMask")]
+    update_mask: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateSecretSpec {
+    /// The resource name of the secret
+    name: String,
+    /// Labels to update (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    labels: Option<serde_json::Value>,
+    /// Replication configuration (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replication: Option<Replication>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CreateParameterRequest {
+    #[serde(rename = "parameterId")]
+    parameter_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameter: Option<ParameterSpec>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ParameterSpec {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    labels: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CreateParameterVersionRequest {
+    #[serde(rename = "parameterVersionId", skip_serializing_if = "Option::is_none")]
+    version_id: Option<String>,
+    parameter_version: ParameterVersionSpec,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ParameterVersionSpec {
+    payload: ParameterPayload,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ParameterPayload {
+    data: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ParameterResponse {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<ParameterPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    create_time: Option<String>,
 }
 
 /// GET secret value (access latest version)
@@ -125,6 +203,7 @@ async fn get_secret_value_access(
                     }),
                     replication: None,
                     create_time: Some(create_time),
+                    labels: None,
                 };
                 return Json(response).into_response();
             }
@@ -145,6 +224,7 @@ async fn get_secret_value_access(
 /// - GET /v1/projects/{project}/secrets/{secret}/versions/latest:access
 /// - GET /v1/projects/{project}/secrets/{secret}/versions/{version}:access
 /// - GET /v1/projects/{project}/secrets/{secret}/versions (list versions)
+/// - GET /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions/{version}:render
 /// - POST /v1/projects/{project}/secrets/{secret}:addVersion
 /// - POST /v1/projects/{project}/secrets/{secret}:disable
 /// - POST /v1/projects/{project}/secrets/{secret}:enable
@@ -154,7 +234,7 @@ async fn handle_colon_routes(
     State(app_state): State<GcpAppState>,
     method: Method,
     uri: Uri,
-    body: Option<axum::extract::Json<AddVersionRequest>>,
+    body: Option<axum::extract::Json<serde_json::Value>>,
 ) -> Response {
     let path = uri.path();
 
@@ -178,62 +258,67 @@ async fn handle_colon_routes(
         }
     }
 
-    // Handle POST request to path ending with :addVersion
-    if method == Method::POST && path.contains(":addVersion") {
-        // Parse path: /v1/projects/{project}/secrets/{secret}:addVersion
+    // Handle POST request to path ending with :addVersion (Secret Manager only)
+    // Parameter Manager now uses POST /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions
+    // This handler only processes Secret Manager requests
+    if method == Method::POST && path.contains(":addVersion") && !path.contains("/parameters/") {
         let parts: Vec<&str> = path.split('/').collect();
         let project = parts.get(3).unwrap_or(&"unknown").to_string();
+        // Secret Manager route: /v1/projects/{project}/secrets/{secret}:addVersion
         let secret_part = parts.get(5).unwrap_or(&"unknown");
         let secret = secret_part.split(':').next().unwrap_or("unknown").to_string();
 
-        if let Some(Json(body)) = body {
-            info!("  ADD VERSION: project={}, secret={}", project, secret);
-            
-            // Validate secret size (GCP limit: 64KB)
-            if let Err(size_error) = validate_gcp_secret_size(&body.payload.data) {
-                warn!("  Secret size validation failed: {}", size_error);
-                return gcp_error_response(
-                    StatusCode::BAD_REQUEST,
-                    size_error,
-                    Some("INVALID_ARGUMENT"),
-                );
-            }
-            
-            // Add a new version with the payload data
-            let version_data = json!({
-                "payload": {
-                    "data": body.payload.data
+        if let Some(Json(body_json)) = body {
+            if let Ok(body) = serde_json::from_value::<AddVersionRequest>(body_json) {
+                info!("  ADD VERSION: project={}, secret={}", project, secret);
+                
+                // Validate secret size (GCP limit: 64KB)
+                if let Err(size_error) = validate_gcp_secret_size(&body.payload.data) {
+                    warn!("  Secret size validation failed: {}", size_error);
+                    return gcp_error_response(
+                        StatusCode::BAD_REQUEST,
+                        size_error,
+                        Some("INVALID_ARGUMENT"),
+                    );
                 }
-            });
-            
-            let version_id = app_state.secrets.add_version(
-                &project,
-                &secret,
-                version_data,
-                None, // Auto-generate version ID (sequential for GCP)
-            ).await;
+                
+                // Add a new version with the payload data
+                let version_data = json!({
+                    "payload": {
+                        "data": body.payload.data
+                    }
+                });
+                
+                let version_id = app_state.secrets.add_version(
+                    &project,
+                    &secret,
+                    version_data,
+                    None, // Auto-generate version ID (sequential for GCP)
+                ).await;
 
-            // Get the version to include timestamp
-            let version = app_state.secrets.get_version(&project, &secret, &version_id).await;
-            let create_time = version.as_ref()
-                .map(|v| format_timestamp_rfc3339(v.created_at));
+                // Get the version to include timestamp
+                let version = app_state.secrets.get_version(&project, &secret, &version_id).await;
+                let create_time = version.as_ref()
+                    .map(|v| format_timestamp_rfc3339(v.created_at));
 
-            let response = SecretResponse {
-                name: format!("projects/{}/secrets/{}/versions/{}", project, secret, version_id),
-                payload: Some(body.payload),
-                replication: None,
-                create_time,
-            };
+                let response = SecretResponse {
+                    name: format!("projects/{}/secrets/{}/versions/{}", project, secret, version_id),
+                    payload: Some(body.payload),
+                    replication: None,
+                    create_time,
+                    labels: None,
+                };
 
-            info!("  Added version {} to mock secret: {}", version_id, secret);
-            return Json(response).into_response();
-        } else {
-            return gcp_error_response(
-                StatusCode::BAD_REQUEST,
-                "Missing request body".to_string(),
-                Some("INVALID_ARGUMENT"),
-            );
+                info!("  Added version {} to mock secret: {}", version_id, secret);
+                return Json(response).into_response();
+            }
         }
+        
+        return gcp_error_response(
+            StatusCode::BAD_REQUEST,
+            "Invalid request body for secret version".to_string(),
+            Some("INVALID_ARGUMENT"),
+        );
     }
 
     // Handle POST request to path ending with :disable (secret or version)
@@ -257,6 +342,7 @@ async fn handle_colon_routes(
                     payload: None,
                     replication: None,
                     create_time: None,
+                    labels: None,
                 };
                 return Json(response).into_response();
             } else {
@@ -279,6 +365,7 @@ async fn handle_colon_routes(
                     payload: None,
                     replication: None,
                     create_time: None,
+                    labels: None,
                 };
                 return Json(response).into_response();
             } else {
@@ -312,6 +399,7 @@ async fn handle_colon_routes(
                     payload: None,
                     replication: None,
                     create_time: None,
+                    labels: None,
                 };
                 return Json(response).into_response();
             } else {
@@ -334,6 +422,7 @@ async fn handle_colon_routes(
                     payload: None,
                     replication: None,
                     create_time: None,
+                    labels: None,
                 };
                 return Json(response).into_response();
             } else {
@@ -403,6 +492,7 @@ async fn get_secret_version_access(
                     }),
                     replication: None,
                     create_time: Some(create_time),
+                    labels: None,
                 };
                 return Json(response).into_response();
             }
@@ -485,6 +575,7 @@ async fn create_secret(
         payload: None,
         replication: Some(body.replication),
         create_time: None, // Secret metadata doesn't include version timestamps
+        labels: None,
     };
 
     info!("  Created mock secret and stored: {}", body.secret_id);
@@ -516,6 +607,7 @@ async fn get_secret_metadata(
             payload: None,
             replication: Some(replication),
             create_time: None, // Secret metadata doesn't include version timestamps
+            labels: None,
         };
 
         return Json(response).into_response();
@@ -545,6 +637,602 @@ async fn delete_secret(
         warn!("  Secret not found in store: projects/{}/secrets/{}", project, secret);
         StatusCode::NOT_FOUND
     }
+}
+
+/// GET list of secrets
+/// Path: /v1/projects/{project}/secrets
+async fn list_secrets(
+    State(app_state): State<GcpAppState>,
+    Path(project): Path<String>,
+) -> Response {
+    info!("  GET secrets list: project={}", project);
+
+    // Get all secrets for this project
+    let secret_names = app_state.secrets.list_all_secrets(&project).await;
+
+    let secret_list: Vec<SecretResponse> = secret_names
+        .iter()
+        .filter_map(|secret_name| {
+            // Get metadata for each secret
+            let metadata = app_state.secrets.get_metadata(&project, secret_name);
+            let rt = tokio::runtime::Handle::current();
+            let metadata = rt.block_on(metadata)?;
+
+            // Extract replication from metadata
+            let replication = metadata
+                .get("replication")
+                .and_then(|r| serde_json::from_value(r.clone()).ok())
+                .unwrap_or_else(|| Replication {
+                    automatic: Some(json!({})),
+                });
+
+            // Get create time from first version (if exists)
+            let versions = app_state.secrets.list_versions(&project, secret_name);
+            let create_time = rt.block_on(versions)
+                .and_then(|v| v.first().cloned())
+                .map(|v| format_timestamp_rfc3339(v.created_at));
+
+            // Extract labels from metadata if present
+            let labels = metadata.get("labels").cloned();
+
+            Some(SecretResponse {
+                name: format!("projects/{}/secrets/{}", project, secret_name),
+                payload: None,
+                replication: Some(replication),
+                create_time,
+                labels,
+            })
+        })
+        .collect();
+
+    Json(ListSecretsResponse {
+        secrets: secret_list,
+        total_size: None, // GCP API doesn't always include this
+    })
+    .into_response()
+}
+
+/// PATCH secret (update metadata)
+/// Path: /v1/projects/{project}/secrets/{secret}
+async fn patch_secret(
+    State(app_state): State<GcpAppState>,
+    Path((project, secret)): Path<(String, String)>,
+    Json(body): Json<UpdateSecretRequest>,
+) -> Response {
+    info!("  PATCH secret: project={}, secret={}", project, secret);
+
+    // Check if secret exists
+    if !app_state.secrets.exists(&project, &secret).await {
+        warn!("  Secret not found: projects/{}/secrets/{}", project, secret);
+        return gcp_error_response(
+            StatusCode::NOT_FOUND,
+            format!("Secret not found: projects/{}/secrets/{}", project, secret),
+            Some("NOT_FOUND"),
+        );
+    }
+
+    // Get existing metadata
+    let existing_metadata = app_state.secrets.get_metadata(&project, &secret).await
+        .unwrap_or_else(|| json!({}));
+
+    // Parse update mask to determine which fields to update
+    let update_mask: Vec<&str> = body.update_mask.split(',').map(|s| s.trim()).collect();
+
+    // Build updated metadata
+    let mut updated_metadata = existing_metadata.clone();
+
+    // Update labels if in mask
+    if update_mask.contains(&"labels") {
+        if let Some(labels) = body.secret.labels {
+            updated_metadata["labels"] = labels;
+        }
+    }
+
+    // Update replication if in mask
+    if update_mask.contains(&"replication") {
+        if let Some(replication) = body.secret.replication {
+            updated_metadata["replication"] = serde_json::to_value(&replication).unwrap_or(json!({}));
+        }
+    }
+
+    // Save updated metadata
+    app_state.secrets.update_metadata(&project, &secret, updated_metadata.clone()).await;
+
+    // Get replication for response
+    let replication = updated_metadata
+        .get("replication")
+        .and_then(|r| serde_json::from_value(r.clone()).ok())
+        .unwrap_or_else(|| Replication {
+            automatic: Some(json!({})),
+        });
+
+    // Get labels for response
+    let labels = updated_metadata.get("labels").cloned();
+
+    // Get create time from first version (if exists)
+    let versions = app_state.secrets.list_versions(&project, &secret).await;
+    let create_time = versions
+        .and_then(|v| v.first().cloned())
+        .map(|v| format_timestamp_rfc3339(v.created_at));
+
+    let response = SecretResponse {
+        name: format!("projects/{}/secrets/{}", project, secret),
+        payload: None,
+        replication: Some(replication),
+        create_time,
+        labels,
+    };
+
+    info!("  Updated secret metadata: projects/{}/secrets/{}", project, secret);
+    Json(response).into_response()
+}
+
+// ============================================================================
+// GCP Parameter Manager API Handlers
+// ============================================================================
+
+/// CREATE parameter
+/// Path: /v1/projects/{project}/locations/{location}/parameters
+async fn create_parameter(
+    State(app_state): State<GcpAppState>,
+    Path((project, location)): Path<(String, String)>,
+    Json(body): Json<CreateParameterRequest>,
+) -> Json<ParameterResponse> {
+    info!("  CREATE parameter: project={}, location={}, parameter_id={}", project, location, body.parameter_id);
+    
+    // Store the parameter metadata (format, labels, etc.)
+    let format_str = body.parameter
+        .as_ref()
+        .and_then(|p| p.format.as_ref())
+        .map(|s| s.as_str())
+        .unwrap_or("PLAIN_TEXT");
+    let metadata = json!({
+        "format": format_str
+    });
+    app_state.parameters.update_metadata(&project, &location, &body.parameter_id, metadata).await;
+
+    let response = ParameterResponse {
+        name: format!("projects/{}/locations/{}/parameters/{}", project, location, body.parameter_id),
+        format: body.parameter.as_ref().and_then(|p| p.format.clone()),
+        payload: None,
+        create_time: None, // Parameter metadata doesn't include version timestamps
+    };
+
+    info!("  Created mock parameter and stored: {}", body.parameter_id);
+    Json(response)
+}
+
+/// CREATE parameter version
+/// Path: /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions
+async fn create_parameter_version(
+    State(app_state): State<GcpAppState>,
+    Path((project, location, parameter)): Path<(String, String, String)>,
+    Json(body): Json<CreateParameterVersionRequest>,
+) -> Response {
+    info!(
+        "  CREATE parameter version: project={}, location={}, parameter={}",
+        project, location, parameter
+    );
+
+    // Extract version ID from request or generate one
+    let version_id = body.version_id
+        .unwrap_or_else(|| format!("v{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()));
+
+    // Validate parameter size (GCP Parameter Manager limit: 1 MiB)
+    let payload_size = body.parameter_version.payload.data.len();
+    if payload_size > 1_048_576 {
+        warn!("  Parameter size validation failed: {} bytes exceeds 1 MiB limit", payload_size);
+        return gcp_error_response(
+            StatusCode::BAD_REQUEST,
+            format!("Parameter size {} bytes exceeds 1 MiB limit", payload_size),
+            Some("INVALID_ARGUMENT"),
+        );
+    }
+
+    // Add a new version with the payload data
+    let version_data = json!({
+        "payload": {
+            "data": body.parameter_version.payload.data
+        }
+    });
+
+    let created_version_id = app_state.parameters.add_version(
+        &project,
+        &location,
+        &parameter,
+        version_data,
+        version_id.clone(),
+    ).await;
+
+    // Get the version to include timestamp
+    let version = app_state.parameters.get_version(&project, &location, &parameter, &created_version_id).await;
+    let create_time = version.as_ref()
+        .map(|v| format_timestamp_rfc3339(v.created_at));
+
+    let response = ParameterResponse {
+        name: format!("projects/{}/locations/{}/parameters/{}/versions/{}", project, location, parameter, created_version_id),
+        format: None,
+        payload: None,
+        create_time,
+    };
+
+    info!("  Created version {} for parameter: {}", created_version_id, parameter);
+    Json(response).into_response()
+}
+
+/// GET parameter versions list
+/// Path: /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions
+async fn list_parameter_versions(
+    State(app_state): State<GcpAppState>,
+    Path((project, location, parameter)): Path<(String, String, String)>,
+) -> Response {
+    info!(
+        "  GET parameter versions list: project={}, location={}, parameter={}",
+        project, location, parameter
+    );
+
+    // Check if parameter exists
+    if !app_state.parameters.exists(&project, &location, &parameter).await {
+        warn!("  Parameter not found: projects/{}/locations/{}/parameters/{}", project, location, parameter);
+        return gcp_error_response(
+            StatusCode::NOT_FOUND,
+            format!("Parameter not found: projects/{}/locations/{}/parameters/{}", project, location, parameter),
+            Some("NOT_FOUND"),
+        );
+    }
+
+    // Get all versions
+    if let Some(versions) = app_state.parameters.list_versions(&project, &location, &parameter).await {
+        let version_list: Vec<serde_json::Value> = versions
+            .iter()
+            .map(|v| {
+                json!({
+                    "name": format!("projects/{}/locations/{}/parameters/{}/versions/{}", project, location, parameter, v.version_id),
+                    "createTime": format_timestamp_rfc3339(v.created_at),
+                    "state": if v.enabled { "ENABLED" } else { "DISABLED" }
+                })
+            })
+            .collect();
+
+        Json(json!({
+            "versions": version_list
+        }))
+        .into_response()
+    } else {
+        // No versions found, return empty list
+        Json(json!({
+            "versions": []
+        }))
+        .into_response()
+    }
+}
+
+/// GET parameter version (specific version)
+/// Path: /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions/{version}
+async fn get_parameter_version(
+    State(app_state): State<GcpAppState>,
+    Path((project, location, parameter, version)): Path<(String, String, String, String)>,
+) -> Response {
+    info!(
+        "  GET parameter version: project={}, location={}, parameter={}, version={}",
+        project, location, parameter, version
+    );
+
+    // Try to retrieve version from in-memory store
+    if let Some(version_data) = app_state.parameters.get_version(&project, &location, &parameter, &version).await {
+        info!("  Found parameter version {} in store: projects/{}/locations/{}/parameters/{}", version_data.version_id, project, location, parameter);
+        
+        // Extract the payload from version data
+        if let Some(payload_obj) = version_data.data.get("payload") {
+            if let Some(data) = payload_obj.get("data").and_then(|v| v.as_str()) {
+                // Convert Unix timestamp to RFC3339 format (GCP API format)
+                let create_time = format_timestamp_rfc3339(version_data.created_at);
+                
+                let response = ParameterResponse {
+                    name: format!("projects/{}/locations/{}/parameters/{}/versions/{}", project, location, parameter, version_data.version_id),
+                    format: None,
+                    payload: Some(ParameterPayload {
+                        data: data.to_string(),
+                    }),
+                    create_time: Some(create_time),
+                };
+                return Json(response).into_response();
+            }
+        }
+    }
+
+    // Version not found, return 404
+    warn!("  Parameter version not found: projects/{}/locations/{}/parameters/{}/versions/{}", project, location, parameter, version);
+    gcp_error_response(
+        StatusCode::NOT_FOUND,
+        format!("Parameter version not found: projects/{}/locations/{}/parameters/{}/versions/{}", project, location, parameter, version),
+        Some("NOT_FOUND"),
+    )
+}
+
+/// GET parameter metadata
+/// Path: /v1/projects/{project}/locations/{location}/parameters/{parameter}
+async fn get_parameter(
+    State(app_state): State<GcpAppState>,
+    Path((project, location, parameter)): Path<(String, String, String)>,
+) -> Response {
+    info!("  GET parameter: project={}, location={}, parameter={}", project, location, parameter);
+
+    if !app_state.parameters.exists(&project, &location, &parameter).await {
+        warn!("  Parameter not found: projects/{}/locations/{}/parameters/{}", project, location, parameter);
+        return gcp_error_response(
+            StatusCode::NOT_FOUND,
+            format!("Parameter not found: projects/{}/locations/{}/parameters/{}", project, location, parameter),
+            Some("NOT_FOUND"),
+        );
+    }
+
+    // Get parameter metadata
+    if let Some(metadata) = app_state.parameters.get_metadata(&project, &location, &parameter).await {
+        let format = metadata.get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("PLAIN_TEXT");
+
+        let response = ParameterResponse {
+            name: format!("projects/{}/locations/{}/parameters/{}", project, location, parameter),
+            format: Some(format.to_string()),
+            payload: None,
+            create_time: None,
+        };
+
+        Json(response).into_response()
+    } else {
+        gcp_error_response(
+            StatusCode::NOT_FOUND,
+            format!("Parameter not found: projects/{}/locations/{}/parameters/{}", project, location, parameter),
+            Some("NOT_FOUND"),
+        )
+    }
+}
+
+/// LIST parameters
+/// Path: /v1/projects/{project}/locations/{location}/parameters
+async fn list_parameters(
+    State(app_state): State<GcpAppState>,
+    Path((project, location)): Path<(String, String)>,
+) -> Response {
+    info!("  LIST parameters: project={}, location={}", project, location);
+
+    // Note: The mock server doesn't currently track all parameters in a location
+    // For now, return an empty list. In a real implementation, we'd need to track
+    // all parameters by location.
+    Json(json!({
+        "parameters": [],
+        "nextPageToken": serde_json::Value::Null
+    }))
+    .into_response()
+}
+
+/// PATCH parameter
+/// Path: /v1/projects/{project}/locations/{location}/parameters/{parameter}
+async fn update_parameter(
+    State(app_state): State<GcpAppState>,
+    Path((project, location, parameter)): Path<(String, String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    info!("  PATCH parameter: project={}, location={}, parameter={}", project, location, parameter);
+
+    if !app_state.parameters.exists(&project, &location, &parameter).await {
+        warn!("  Parameter not found: projects/{}/locations/{}/parameters/{}", project, location, parameter);
+        return gcp_error_response(
+            StatusCode::NOT_FOUND,
+            format!("Parameter not found: projects/{}/locations/{}/parameters/{}", project, location, parameter),
+            Some("NOT_FOUND"),
+        );
+    }
+
+    // Extract parameter spec from request
+    if let Some(param_spec) = body.get("parameter").and_then(|p| p.as_object()) {
+        let metadata = json!({
+            "format": param_spec.get("format").and_then(|v| v.as_str()).unwrap_or("PLAIN_TEXT"),
+            "labels": param_spec.get("labels")
+        });
+        app_state.parameters.update_metadata(&project, &location, &parameter, metadata).await;
+
+        let response = ParameterResponse {
+            name: format!("projects/{}/locations/{}/parameters/{}", project, location, parameter),
+            format: param_spec.get("format").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            payload: None,
+            create_time: None,
+        };
+
+        Json(response).into_response()
+    } else {
+        gcp_error_response(
+            StatusCode::BAD_REQUEST,
+            "Invalid request body: missing 'parameter' field".to_string(),
+            Some("INVALID_ARGUMENT"),
+        )
+    }
+}
+
+/// DELETE parameter
+/// Path: /v1/projects/{project}/locations/{location}/parameters/{parameter}
+async fn delete_parameter(
+    State(app_state): State<GcpAppState>,
+    Path((project, location, parameter)): Path<(String, String, String)>,
+) -> StatusCode {
+    info!("  DELETE parameter: project={}, location={}, parameter={}", project, location, parameter);
+    
+    if app_state.parameters.delete_parameter(&project, &location, &parameter).await {
+        info!("  Deleted parameter from store: {}", parameter);
+        StatusCode::OK
+    } else {
+        warn!("  Parameter not found in store: projects/{}/locations/{}/parameters/{}", project, location, parameter);
+        StatusCode::NOT_FOUND
+    }
+}
+
+/// PATCH parameter version
+/// Path: /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions/{version}
+async fn update_parameter_version(
+    State(app_state): State<GcpAppState>,
+    Path((project, location, parameter, version)): Path<(String, String, String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    info!("  PATCH parameter version: project={}, location={}, parameter={}, version={}", project, location, parameter, version);
+
+    // Extract state from request
+    if let Some(param_version) = body.get("parameterVersion").and_then(|pv| pv.as_object()) {
+        if let Some(state) = param_version.get("state").and_then(|s| s.as_str()) {
+            let enabled = state == "ENABLED";
+            
+            // Update version state in store
+            if let Some(version_data) = app_state.parameters.get_version(&project, &location, &parameter, &version).await {
+                // Disable/enable the version
+                if enabled {
+                    app_state.parameters.enable_version(&project, &location, &parameter, &version).await;
+                } else {
+                    app_state.parameters.disable_version(&project, &location, &parameter, &version).await;
+                }
+
+                // Get updated version
+                if let Some(updated_version) = app_state.parameters.get_version(&project, &location, &parameter, &version).await {
+                    let response = ParameterResponse {
+                        name: format!("projects/{}/locations/{}/parameters/{}/versions/{}", project, location, parameter, version),
+                        format: None,
+                        payload: Some(ParameterPayload {
+                            data: updated_version.data.get("payload")
+                                .and_then(|p| p.get("data"))
+                                .and_then(|d| d.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                        }),
+                        create_time: Some(format_timestamp_rfc3339(updated_version.created_at)),
+                    };
+
+                    return Json(response).into_response();
+                }
+            }
+        }
+    }
+
+    gcp_error_response(
+        StatusCode::NOT_FOUND,
+        format!("Parameter version not found: projects/{}/locations/{}/parameters/{}/versions/{}", project, location, parameter, version),
+        Some("NOT_FOUND"),
+    )
+}
+
+/// DELETE parameter version
+/// Path: /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions/{version}
+async fn delete_parameter_version(
+    State(app_state): State<GcpAppState>,
+    Path((project, location, parameter, version)): Path<(String, String, String, String)>,
+) -> StatusCode {
+    info!("  DELETE parameter version: project={}, location={}, parameter={}, version={}", project, location, parameter, version);
+
+    // Delete version from store using the parameter store method
+    let deleted = app_state.parameters.delete_version(&project, &location, &parameter, &version).await;
+    
+    if deleted {
+        info!("  Deleted parameter version {} from store", version);
+        StatusCode::OK
+    } else {
+        warn!("  Parameter version not found: projects/{}/locations/{}/parameters/{}/versions/{}", project, location, parameter, version);
+        StatusCode::NOT_FOUND
+    }
+}
+
+/// RENDER parameter version
+/// Path: /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions/{version}:render
+async fn render_parameter_version(
+    State(app_state): State<GcpAppState>,
+    Path((project, location, parameter, version)): Path<(String, String, String, String)>,
+) -> Response {
+    info!("  RENDER parameter version: project={}, location={}, parameter={}, version={}", project, location, parameter, version);
+
+    if let Some(version_data) = app_state.parameters.get_version(&project, &location, &parameter, &version).await {
+        // Extract and decode the payload
+        if let Some(payload_obj) = version_data.data.get("payload") {
+            if let Some(data) = payload_obj.get("data").and_then(|v| v.as_str()) {
+                // Decode base64
+                use base64::{engine::general_purpose, Engine as _};
+                if let Ok(decoded) = general_purpose::STANDARD.decode(data) {
+                    if let Ok(rendered_value) = String::from_utf8(decoded) {
+                        return Json(json!({
+                            "renderedValue": rendered_value
+                        }))
+                        .into_response();
+                    }
+                }
+            }
+        }
+    }
+
+    gcp_error_response(
+        StatusCode::NOT_FOUND,
+        format!("Parameter version not found: projects/{}/locations/{}/parameters/{}/versions/{}", project, location, parameter, version),
+        Some("NOT_FOUND"),
+    )
+}
+
+// ============================================================================
+// GCP Location API Handlers
+// ============================================================================
+
+/// GET location
+/// Path: /v1/projects/{project}/locations/{location}
+async fn get_location(
+    State(_app_state): State<GcpAppState>,
+    Path((project, location)): Path<(String, String)>,
+) -> Response {
+    info!("  GET location: project={}, location={}", project, location);
+
+    // Return location information
+    // Common locations: "global", "us-central1", "us-east1", "europe-west1", etc.
+    let response = json!({
+        "name": format!("projects/{}/locations/{}", project, location),
+        "locationId": location,
+        "displayName": format!("{} ({})", location, if location == "global" { "Global" } else { "Regional" })
+    });
+
+    Json(response).into_response()
+}
+
+/// LIST locations
+/// Path: /v1/projects/{project}/locations
+async fn list_locations(
+    State(_app_state): State<GcpAppState>,
+    Path(project): Path<String>,
+) -> Response {
+    info!("  LIST locations: project={}", project);
+
+    // Return list of common GCP locations
+    // In a real implementation, this would query GCP for available locations
+    let locations = vec![
+        json!({
+            "name": format!("projects/{}/locations/global", project),
+            "locationId": "global",
+            "displayName": "Global"
+        }),
+        json!({
+            "name": format!("projects/{}/locations/us-central1", project),
+            "locationId": "us-central1",
+            "displayName": "Iowa (Regional)"
+        }),
+        json!({
+            "name": format!("projects/{}/locations/us-east1", project),
+            "locationId": "us-east1",
+            "displayName": "South Carolina (Regional)"
+        }),
+        json!({
+            "name": format!("projects/{}/locations/europe-west1", project),
+            "locationId": "europe-west1",
+            "displayName": "Belgium (Regional)"
+        }),
+    ];
+
+    Json(json!({
+        "locations": locations,
+        "nextPageToken": serde_json::Value::Null
+    }))
+    .into_response()
 }
 
 #[tokio::main]
@@ -584,25 +1272,80 @@ async fn main() {
     let app_state = GcpAppState {
         contracts: contracts_state.contracts,
         secrets: GcpSecretStore::new(),
+        parameters: GcpParameterStore::new(),
     };
 
-    // Build router with explicit routes for all GCP Secret Manager API endpoints
+    // Build router with explicit routes for all GCP Secret Manager and Parameter Manager API endpoints
     let app = Router::new()
         // Health check endpoints
         .route("/", get(health_check))
         .route("/health", get(health_check))
         // GCP Secret Manager API endpoints
         // POST /v1/projects/{project}/secrets - Create a new secret
-        .route("/v1/projects/{project}/secrets", post(create_secret))
+        // GET /v1/projects/{project}/secrets - List secrets
+        .route(
+            "/v1/projects/{project}/secrets",
+            post(create_secret).get(list_secrets),
+        )
         // GET /v1/projects/{project}/secrets/{secret}/versions/latest:access - Get secret value (access latest)
         // Note: The colon in the path requires using fallback handler
         // This route is handled by the fallback handler which parses the path manually
+        // GET /v1/projects/{project}/secrets/{secret} - Get secret metadata
+        // PATCH /v1/projects/{project}/secrets/{secret} - Update secret metadata
         // DELETE /v1/projects/{project}/secrets/{secret} - Delete secret
         .route(
             "/v1/projects/{project}/secrets/{secret}",
-            delete(delete_secret).get(get_secret_metadata),
+            delete(delete_secret)
+                .get(get_secret_metadata)
+                .patch(patch_secret),
         )
-        // POST /v1/projects/{project}/secrets/{secret}:addVersion - Add a new version
+        // GCP Parameter Manager API endpoints
+        // POST /v1/projects/{project}/locations/{location}/parameters - Create a new parameter
+        .route("/v1/projects/{project}/locations/{location}/parameters", post(create_parameter))
+        // GET /v1/projects/{project}/locations/{location}/parameters - List parameters
+        .route(
+            "/v1/projects/{project}/locations/{location}/parameters",
+            get(list_parameters),
+        )
+        // GET /v1/projects/{project}/locations/{location}/parameters/{parameter} - Get parameter
+        // PATCH /v1/projects/{project}/locations/{location}/parameters/{parameter} - Update parameter
+        // DELETE /v1/projects/{project}/locations/{location}/parameters/{parameter} - Delete parameter
+        .route(
+            "/v1/projects/{project}/locations/{location}/parameters/{parameter}",
+            get(get_parameter).patch(update_parameter).delete(delete_parameter),
+        )
+        // GCP Location API endpoints
+        // GET /v1/projects/{project}/locations/{location} - Get location
+        .route(
+            "/v1/projects/{project}/locations/{location}",
+            get(get_location),
+        )
+        // GET /v1/projects/{project}/locations - List locations
+        .route(
+            "/v1/projects/{project}/locations",
+            get(list_locations),
+        )
+        // POST /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions - Create parameter version
+        .route(
+            "/v1/projects/{project}/locations/{location}/parameters/{parameter}/versions",
+            post(create_parameter_version),
+        )
+        // GET /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions - List parameter versions
+        .route(
+            "/v1/projects/{project}/locations/{location}/parameters/{parameter}/versions",
+            get(list_parameter_versions),
+        )
+        // GET /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions/{version} - Get specific parameter version
+        // PATCH /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions/{version} - Update parameter version
+        // DELETE /v1/projects/{project}/locations/{location}/parameters/{parameter}/versions/{version} - Delete parameter version
+        .route(
+            "/v1/projects/{project}/locations/{location}/parameters/{parameter}/versions/{version}",
+            get(get_parameter_version)
+                .patch(update_parameter_version)
+                .delete(delete_parameter_version),
+        )
+        // POST /v1/projects/{project}/secrets/{secret}:addVersion - Add a new version (Secret Manager)
+        // POST /v1/projects/{project}/parameters/{parameter}:addVersion - Add a new version (Parameter Manager)
         .fallback(handle_colon_routes)
         .layer(
             ServiceBuilder::new()

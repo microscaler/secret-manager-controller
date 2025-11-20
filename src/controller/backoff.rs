@@ -141,6 +141,65 @@ impl FibonacciBackoff {
         self.prev_minutes = 0;
         self.current_minutes = self.min_minutes;
     }
+
+    /// Calculate the Fibonacci backoff duration for a given error count (stateless)
+    ///
+    /// This is a stateless function that calculates the nth Fibonacci number in the sequence
+    /// without maintaining internal state. Useful for one-off calculations based on error count.
+    ///
+    /// The sequence starts at `min_minutes` for error_count 0 and 1, then follows the Fibonacci
+    /// sequence: min, min, min*2, min*3, min*5, min*8, etc., capped at `max_minutes`.
+    ///
+    /// # Arguments
+    ///
+    /// * `error_count` - The number of consecutive errors (0-indexed)
+    /// * `min_minutes` - Minimum backoff duration in minutes (typically 1)
+    /// * `max_minutes` - Maximum backoff duration in minutes (typically 60)
+    ///
+    /// # Returns
+    ///
+    /// The backoff duration as a `Duration`, capped at `max_minutes`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use secret_manager_controller::controller::backoff::FibonacciBackoff;
+    /// use std::time::Duration;
+    ///
+    /// // Calculate backoff for 3 consecutive errors
+    /// let duration = FibonacciBackoff::calculate_for_error_count(3, 1, 60);
+    /// assert_eq!(duration, Duration::from_secs(180)); // 3 minutes = 180 seconds
+    /// ```
+    #[must_use]
+    pub fn calculate_for_error_count(
+        error_count: u32,
+        min_minutes: u64,
+        max_minutes: u64,
+    ) -> Duration {
+        if error_count == 0 || error_count == 1 {
+            // First two values are both min_minutes
+            return Duration::from_secs(min_minutes * 60);
+        }
+
+        // Calculate Fibonacci sequence: F(n) = F(n-1) + F(n-2)
+        // Start with prev = min, current = min
+        let mut prev_minutes = min_minutes;
+        let mut current_minutes = min_minutes;
+
+        // Calculate up to error_count
+        for _ in 2..=error_count {
+            let next_minutes = prev_minutes + current_minutes;
+            prev_minutes = current_minutes;
+            current_minutes = std::cmp::min(next_minutes, max_minutes);
+
+            // If we've hit the max, we can stop early
+            if current_minutes >= max_minutes {
+                break;
+            }
+        }
+
+        Duration::from_secs(current_minutes * 60)
+    }
 }
 
 #[cfg(test)]
@@ -236,5 +295,82 @@ mod tests {
         // Second backoff continues independently from where it left off
         assert_eq!(backoff2.next_backoff_seconds(), 180); // F(3) = 3m = 180s (1+2)
         assert_eq!(backoff2.next_backoff_seconds(), 300); // F(4) = 5m = 300s (2+3)
+    }
+
+    #[test]
+    fn test_calculate_for_error_count_sequence() {
+        // Test that calculate_for_error_count produces the same sequence as the stateful version
+        // Sequence: 1m, 1m, 2m, 3m, 5m, 8m, 13m, 21m, 34m, 55m, then cap at 60m
+        assert_eq!(
+            FibonacciBackoff::calculate_for_error_count(0, 1, 60),
+            Duration::from_secs(60)
+        ); // 1m = 60s
+        assert_eq!(
+            FibonacciBackoff::calculate_for_error_count(1, 1, 60),
+            Duration::from_secs(60)
+        ); // 1m = 60s
+        assert_eq!(
+            FibonacciBackoff::calculate_for_error_count(2, 1, 60),
+            Duration::from_secs(120)
+        ); // 2m = 120s
+        assert_eq!(
+            FibonacciBackoff::calculate_for_error_count(3, 1, 60),
+            Duration::from_secs(180)
+        ); // 3m = 180s
+        assert_eq!(
+            FibonacciBackoff::calculate_for_error_count(4, 1, 60),
+            Duration::from_secs(300)
+        ); // 5m = 300s
+        assert_eq!(
+            FibonacciBackoff::calculate_for_error_count(5, 1, 60),
+            Duration::from_secs(480)
+        ); // 8m = 480s
+        assert_eq!(
+            FibonacciBackoff::calculate_for_error_count(6, 1, 60),
+            Duration::from_secs(780)
+        ); // 13m = 780s
+        assert_eq!(
+            FibonacciBackoff::calculate_for_error_count(7, 1, 60),
+            Duration::from_secs(1260)
+        ); // 21m = 1260s
+        assert_eq!(
+            FibonacciBackoff::calculate_for_error_count(8, 1, 60),
+            Duration::from_secs(2040)
+        ); // 34m = 2040s
+        assert_eq!(
+            FibonacciBackoff::calculate_for_error_count(9, 1, 60),
+            Duration::from_secs(3300)
+        ); // 55m = 3300s
+        assert_eq!(
+            FibonacciBackoff::calculate_for_error_count(10, 1, 60),
+            Duration::from_secs(3600)
+        ); // 60m = 3600s (capped)
+    }
+
+    #[test]
+    fn test_calculate_for_error_count_capped() {
+        // Test that values beyond the cap stay at the max
+        assert_eq!(
+            FibonacciBackoff::calculate_for_error_count(100, 1, 60),
+            Duration::from_secs(3600)
+        ); // Should be capped at 60m = 3600s
+    }
+
+    #[test]
+    fn test_calculate_for_error_count_matches_stateful() {
+        // Test that calculate_for_error_count produces the same results as the stateful version
+        let mut stateful = FibonacciBackoff::new(1, 60);
+
+        for error_count in 0..10 {
+            let stateless_duration =
+                FibonacciBackoff::calculate_for_error_count(error_count, 1, 60);
+            let stateful_duration = Duration::from_secs(stateful.next_backoff_seconds());
+
+            assert_eq!(
+                stateless_duration, stateful_duration,
+                "Mismatch at error_count {}: stateless={:?}, stateful={:?}",
+                error_count, stateless_duration, stateful_duration
+            );
+        }
     }
 }

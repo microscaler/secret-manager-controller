@@ -39,6 +39,5 @@ pub use status::{
 };
 pub use types::{BackoffState, Reconciler, ReconcilerError, TriggerSource};
 
-// Re-export for tests
-#[cfg(test)]
+// Re-export utility functions for external use (including tests)
 pub use utils::{construct_secret_name, sanitize_secret_name};

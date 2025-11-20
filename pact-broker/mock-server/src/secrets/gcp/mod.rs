@@ -4,6 +4,10 @@
 //! - Sequential version IDs (1, 2, 3, ...)
 //! - Secret key format: "projects/{project}/secrets/{secret}"
 
+pub mod parameter_store;
+
+pub use parameter_store::GcpParameterStore;
+
 use super::common::{SecretStore, SecretVersion};
 use serde_json::Value;
 
@@ -108,6 +112,25 @@ impl GcpSecretStore {
     pub async fn enable_version(&self, project: &str, secret: &str, version_id: &str) -> bool {
         let key = Self::format_key(project, secret);
         self.store.enable_version(&key, version_id).await
+    }
+
+    /// List all secrets for a project
+    /// Returns a vector of secret names (without the "projects/{project}/secrets/" prefix)
+    pub async fn list_all_secrets(&self, project: &str) -> Vec<String> {
+        let prefix = format!("projects/{}/secrets/", project);
+        let all_keys = self.store.list_all_keys().await;
+        
+        all_keys
+            .iter()
+            .filter_map(|key| {
+                if key.starts_with(&prefix) {
+                    // Extract secret name from "projects/{project}/secrets/{secret}"
+                    key.strip_prefix(&prefix).map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 

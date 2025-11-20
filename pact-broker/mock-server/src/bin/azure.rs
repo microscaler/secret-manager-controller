@@ -15,9 +15,10 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
-    routing::{delete, get, patch, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use pact_mock_server::{
     auth_failure_middleware, health_check, load_contracts_from_broker, logging_middleware,
     rate_limit_middleware, service_unavailable_middleware,
@@ -417,6 +418,245 @@ async fn delete_secret(
     }
 }
 
+/// POST backup secret
+/// Path: /secrets/{name}/backup
+/// Query: api-version=7.4
+async fn backup_secret(
+    State(app_state): State<AzureAppState>,
+    Path(name): Path<String>,
+) -> Response {
+    info!("  BACKUP secret: name={}", name);
+
+    // Check if secret exists
+    if !app_state.secrets.exists(&name).await {
+        return azure_error_response(
+            StatusCode::NOT_FOUND,
+            azure_error_codes::SECRET_NOT_FOUND,
+            format!("Secret {} not found", name),
+        );
+    }
+
+    // Get all versions of the secret
+    let versions = app_state.secrets.list_versions(&name).await;
+    
+    // Create a simple backup blob (base64-encoded JSON of secret data)
+    // In a real implementation, this would be a more complex backup format
+    let backup_data = if let Some(versions) = versions {
+        // Serialize all versions to JSON, then base64 encode
+        let backup_json = json!({
+            "name": name,
+            "versions": versions.iter().map(|v| &v.data).collect::<Vec<_>>()
+        });
+        let json_str = serde_json::to_string(&backup_json).unwrap_or_else(|_| "{}".to_string());
+        STANDARD.encode(json_str.as_bytes())
+    } else {
+        // Empty backup if no versions
+        STANDARD.encode("{}".as_bytes())
+    };
+
+    Json(json!({
+        "value": backup_data
+    }))
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct RestoreSecretRequest {
+    value: String,
+}
+
+/// POST restore secret from backup
+/// Path: /secrets/restore
+/// Query: api-version=7.4
+async fn restore_secret(
+    State(app_state): State<AzureAppState>,
+    Json(body): Json<RestoreSecretRequest>,
+) -> Response {
+    info!("  RESTORE secret from backup");
+
+    // Decode base64 backup blob
+    let backup_bytes = match STANDARD.decode(&body.value) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return azure_error_response(
+                StatusCode::BAD_REQUEST,
+                azure_error_codes::BAD_PARAMETER,
+                "Invalid backup blob format".to_string(),
+            );
+        }
+    };
+
+    // Parse JSON backup data
+    let backup_str = match String::from_utf8(backup_bytes) {
+        Ok(s) => s,
+        Err(_) => {
+            return azure_error_response(
+                StatusCode::BAD_REQUEST,
+                azure_error_codes::BAD_PARAMETER,
+                "Invalid backup blob format".to_string(),
+            );
+        }
+    };
+
+    let backup_json: serde_json::Value = match serde_json::from_str(&backup_str) {
+        Ok(json) => json,
+        Err(_) => {
+            return azure_error_response(
+                StatusCode::BAD_REQUEST,
+                azure_error_codes::BAD_PARAMETER,
+                "Invalid backup blob format".to_string(),
+            );
+        }
+    };
+
+    // Extract secret name and restore
+    let secret_name = backup_json.get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or("restored-secret");
+
+    // Restore versions (simplified - just restore the latest value)
+    if let Some(versions) = backup_json.get("versions").and_then(|v| v.as_array()) {
+        if let Some(last_version) = versions.last() {
+            if let Some(value) = last_version.get("value").and_then(|v| v.as_str()) {
+                let version_id = app_state.secrets.set_secret(secret_name, value.to_string()).await;
+                let version = app_state.secrets.get_version(secret_name, &version_id).await;
+                let created = version.as_ref()
+                    .map(|v| format_timestamp_azure(v.created_at))
+                    .unwrap_or_else(|| format_timestamp_azure(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()));
+
+                return Json(json!({
+                    "id": format!("https://test-vault.vault.azure.net/secrets/{}/{}", secret_name, version_id),
+                    "attributes": {
+                        "enabled": true,
+                        "created": created,
+                        "updated": created,
+                        "recoveryLevel": "Recoverable+Purgeable"
+                    }
+                }))
+                .into_response();
+            }
+        }
+    }
+
+    azure_error_response(
+        StatusCode::BAD_REQUEST,
+        azure_error_codes::BAD_PARAMETER,
+        "Invalid backup data".to_string(),
+    )
+}
+
+/// GET deleted secret
+/// Path: /deletedsecrets/{name}
+/// Query: api-version=7.4
+async fn get_deleted_secret(
+    State(app_state): State<AzureAppState>,
+    Path(name): Path<String>,
+) -> Response {
+    info!("  GET deleted secret: name={}", name);
+
+    if let Some((deleted_date, scheduled_purge_date)) = app_state.secrets.get_deleted_secret(&name).await {
+        Json(json!({
+            "recoveryId": format!("https://test-vault.vault.azure.net/deletedsecrets/{}", name),
+            "deletedDate": deleted_date,
+            "scheduledPurgeDate": scheduled_purge_date,
+            "recoveryLevel": "Recoverable+Purgeable"
+        }))
+        .into_response()
+    } else {
+        azure_error_response(
+            StatusCode::NOT_FOUND,
+            azure_error_codes::SECRET_NOT_FOUND,
+            format!("Deleted secret {} not found", name),
+        )
+    }
+}
+
+/// GET list deleted secrets
+/// Path: /deletedsecrets
+/// Query: api-version=7.4
+async fn list_deleted_secrets(
+    State(app_state): State<AzureAppState>,
+) -> Response {
+    info!("  GET deleted secrets list");
+
+    let deleted_names = app_state.secrets.list_deleted_secrets().await;
+    let deleted_list: Vec<serde_json::Value> = deleted_names
+        .iter()
+        .filter_map(|name| {
+            let (deleted_date, scheduled_purge_date) = {
+                let rt = tokio::runtime::Handle::current();
+                rt.block_on(app_state.secrets.get_deleted_secret(name))?
+            };
+            
+            Some(json!({
+                "recoveryId": format!("https://test-vault.vault.azure.net/deletedsecrets/{}", name),
+                "deletedDate": deleted_date,
+                "scheduledPurgeDate": scheduled_purge_date
+            }))
+        })
+        .collect();
+
+    Json(json!({
+        "value": deleted_list,
+        "nextLink": null
+    }))
+    .into_response()
+}
+
+/// POST recover deleted secret
+/// Path: /deletedsecrets/{name}/recover
+/// Query: api-version=7.4
+async fn recover_deleted_secret(
+    State(app_state): State<AzureAppState>,
+    Path(name): Path<String>,
+) -> Response {
+    info!("  RECOVER deleted secret: name={}", name);
+
+    if app_state.secrets.recover_secret(&name).await {
+        // Get the restored secret's latest version
+        let latest_version = app_state.secrets.get_latest(&name).await;
+        let version_id = latest_version.as_ref()
+            .map(|v| v.version_id.clone())
+            .unwrap_or_else(|| "abc123".to_string());
+        let created = latest_version.as_ref()
+            .map(|v| format_timestamp_azure(v.created_at))
+            .unwrap_or_else(|| format_timestamp_azure(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()));
+
+        Json(json!({
+            "id": format!("https://test-vault.vault.azure.net/secrets/{}/{}", name, version_id),
+            "attributes": {
+                "enabled": true,
+                "created": created,
+                "updated": created,
+                "recoveryLevel": "Recoverable+Purgeable"
+            }
+        }))
+        .into_response()
+    } else {
+        azure_error_response(
+            StatusCode::NOT_FOUND,
+            azure_error_codes::SECRET_NOT_FOUND,
+            format!("Deleted secret {} not found", name),
+        )
+    }
+}
+
+/// DELETE purge deleted secret
+/// Path: /deletedsecrets/{name}
+/// Query: api-version=7.4
+async fn purge_deleted_secret(
+    State(app_state): State<AzureAppState>,
+    Path(name): Path<String>,
+) -> StatusCode {
+    info!("  PURGE deleted secret: name={}", name);
+
+    if app_state.secrets.purge_deleted_secret(&name).await {
+        StatusCode::NO_CONTENT // Azure returns 204 for purge
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize tracing
@@ -477,6 +717,18 @@ async fn main() {
         .route("/secrets/{name}", delete(delete_secret))
         // PATCH /secrets/{name} - Update secret attributes (enabled/disabled)
         .route("/secrets/{name}", patch(update_secret))
+        // POST /secrets/{name}/backup - Backup secret
+        .route("/secrets/{name}/backup", post(backup_secret))
+        // POST /secrets/restore - Restore secret from backup
+        .route("/secrets/restore", post(restore_secret))
+        // GET /deletedsecrets/{name} - Get deleted secret
+        .route("/deletedsecrets/{name}", get(get_deleted_secret))
+        // GET /deletedsecrets - List deleted secrets
+        .route("/deletedsecrets", get(list_deleted_secrets))
+        // POST /deletedsecrets/{name}/recover - Recover deleted secret
+        .route("/deletedsecrets/{name}/recover", post(recover_deleted_secret))
+        // DELETE /deletedsecrets/{name} - Purge deleted secret
+        .route("/deletedsecrets/{name}", delete(purge_deleted_secret))
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())

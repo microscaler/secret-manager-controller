@@ -122,7 +122,8 @@ pub fn record_secret_operation(provider: &str, _operation: &str, duration: f64) 
         .observe(duration);
 
     // Also maintain backward compatibility with GCP-specific metrics
-    // TODO: Consider deprecating GCP-specific metrics in favor of provider-labeled metrics
+    // Note: GCP-specific metrics are kept for backward compatibility.
+    // Future versions may deprecate these in favor of provider-labeled metrics.
     if provider == "gcp" {
         GCP_SECRET_MANAGER_OPERATIONS_TOTAL.inc();
         GCP_SECRET_MANAGER_OPERATION_DURATION.observe(duration);

@@ -10,7 +10,6 @@
 //! - `server`: HTTP server for metrics and health checks
 
 pub mod backoff;
-pub mod crdgen;
 pub mod kustomize;
 pub mod parser;
 pub mod reconciler;

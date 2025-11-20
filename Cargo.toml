@@ -23,7 +23,7 @@ path = "src/main.rs"
 
 [[bin]]
 name = "crdgen"
-path = "src/controller/crdgen.rs"
+path = "src/bin/crdgen.rs"
 
 [[bin]]
 name = "msmctl"

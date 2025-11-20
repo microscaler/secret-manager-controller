@@ -490,6 +490,98 @@ async fn handle_aws_request(
             )
                 .into_response()
         }
+        "secretsmanager.TagResource" => {
+            info!("  TAG secret: {}", secret_name);
+            
+            // Check if secret exists
+            if !app_state.secrets.exists(&secret_name).await {
+                return aws_error_response(
+                    StatusCode::NOT_FOUND,
+                    aws_error_types::RESOURCE_NOT_FOUND,
+                    format!("Secret {} not found", secret_name),
+                );
+            }
+            
+            // Parse tags from request body
+            if let Some(json) = &body_json {
+                if let Some(tags) = json.get("Tags").and_then(|t| t.as_array()) {
+                    info!("  Adding {} tags to secret", tags.len());
+                    // In a real implementation, we would store tags in the secret metadata
+                    // For the mock server, we just return success
+                }
+            }
+            
+            // TagResource returns empty response on success
+            (
+                StatusCode::OK,
+                Json(json!({})),
+            )
+                .into_response()
+        }
+        "secretsmanager.UntagResource" => {
+            info!("  UNTAG secret: {}", secret_name);
+            
+            // Check if secret exists
+            if !app_state.secrets.exists(&secret_name).await {
+                return aws_error_response(
+                    StatusCode::NOT_FOUND,
+                    aws_error_types::RESOURCE_NOT_FOUND,
+                    format!("Secret {} not found", secret_name),
+                );
+            }
+            
+            // Parse tag keys from request body
+            if let Some(json) = &body_json {
+                if let Some(tag_keys) = json.get("TagKeys").and_then(|t| t.as_array()) {
+                    info!("  Removing {} tags from secret", tag_keys.len());
+                    // In a real implementation, we would remove tags from secret metadata
+                    // For the mock server, we just return success
+                }
+            }
+            
+            // UntagResource returns empty response on success
+            (
+                StatusCode::OK,
+                Json(json!({})),
+            )
+                .into_response()
+        }
+        "secretsmanager.GetResourcePolicy" => {
+            info!("  GET resource policy: {}", secret_name);
+            
+            // Check if secret exists
+            if !app_state.secrets.exists(&secret_name).await {
+                return aws_error_response(
+                    StatusCode::NOT_FOUND,
+                    aws_error_types::RESOURCE_NOT_FOUND,
+                    format!("Secret {} not found", secret_name),
+                );
+            }
+            
+            // Return a default resource policy (empty policy allows all)
+            // In a real implementation, this would be stored with the secret
+            let default_policy = json!({
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": "arn:aws:iam::123456789012:root"
+                    },
+                    "Action": "secretsmanager:GetSecretValue",
+                    "Resource": "*"
+                }]
+            });
+            
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ARN": format!("arn:aws:secretsmanager:us-east-1:123456789012:secret:{}", secret_name),
+                    "Name": secret_name,
+                    "ResourcePolicy": serde_json::to_string(&default_policy).unwrap_or_else(|_| "{}".to_string())
+                })),
+            )
+                .into_response()
+        }
         _ => {
             warn!("  ⚠️  Unknown x-amz-target: {}", target);
             aws_error_response(
