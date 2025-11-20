@@ -13,7 +13,7 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::ge
 use prometheus::{Encoder, TextEncoder};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 #[derive(Debug)]
 pub struct ServerState {
@@ -70,11 +70,14 @@ async fn metrics_handler() -> impl IntoResponse {
 }
 
 async fn healthz_handler() -> impl IntoResponse {
+    debug!("Health check (liveness probe) requested");
     StatusCode::OK
 }
 
 async fn readyz_handler(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
-    if state.is_ready.load(std::sync::atomic::Ordering::Relaxed) {
+    let is_ready = state.is_ready.load(std::sync::atomic::Ordering::Relaxed);
+    debug!("Readiness check requested: ready={}", is_ready);
+    if is_ready {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE

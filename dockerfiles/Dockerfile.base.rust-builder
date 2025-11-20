@@ -40,3 +40,19 @@ WORKDIR /build
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 ENV RUST_BACKTRACE=1
 
+# Pre-cache Rust dependencies
+# Copy Cargo files from build context to pre-download dependencies
+# This significantly speeds up subsequent builds by caching downloaded dependencies
+# The build context (.) includes Cargo.toml and Cargo.lock from the project root
+# Dependencies are downloaded to ~/.cargo/registry and ~/.cargo/git, which persist in the image
+COPY Cargo.toml Cargo.lock* ./
+
+# Fetch all dependencies (downloads but doesn't compile)
+# This pre-populates ~/.cargo/registry and ~/.cargo/git with all dependency sources
+# Subsequent builds will be faster because dependencies are already downloaded
+# Use --locked to respect Cargo.lock versions exactly
+RUN cargo fetch --locked 2>/dev/null || true && \
+    # Clean up Cargo files (they'll be copied again in production builds)
+    # Downloaded dependencies remain in ~/.cargo/registry and ~/.cargo/git
+    rm -f Cargo.toml Cargo.lock*
+

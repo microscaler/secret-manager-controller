@@ -46,12 +46,11 @@ CONTROLLER_NAME = 'secret-manager-controller'
 IMAGE_NAME = 'localhost:5000/secret-manager-controller'
 BINARY_NAME = 'secret-manager-controller'
 # Build for Linux x86_64 (cross-compile for container compatibility)
+# Matches PriceWhisperer's pattern - use target path directly, not build_artifacts
 BINARY_PATH = '%s/target/x86_64-unknown-linux-musl/debug/%s' % (CONTROLLER_DIR, BINARY_NAME)
 CRDGEN_PATH = '%s/target/x86_64-unknown-linux-musl/debug/crdgen' % CONTROLLER_DIR
 # Native crdgen for host execution (CRD generation runs on host, not in container)
 CRDGEN_NATIVE_PATH = '%s/target/debug/crdgen' % CONTROLLER_DIR
-ARTIFACT_PATH = 'build_artifacts/%s' % BINARY_NAME
-CRDGEN_ARTIFACT_PATH = 'build_artifacts/crdgen'
 
 
 
@@ -104,36 +103,25 @@ local_resource(
 # ====================
 # Docker Build
 # ====================
-# Build Docker image using custom_build (matches PriceWhisperer pattern)
-# Note: docker_build.py handles image cleanup before building
-
+# Build Docker image using custom_build for live updates
+# Note: Binary must exist before Docker build - deps ensures file exists before build runs
+# Uses Dockerfile.controller.dev for development (expects pre-built binary)
+# Matches PriceWhisperer's exact pattern
 custom_build(
     IMAGE_NAME,
-    'python3 scripts/tilt/docker_build.py',
+    'docker build -f dockerfiles/Dockerfile.controller.dev -t %s:tilt . && docker tag %s:tilt $EXPECTED_REF && docker push $EXPECTED_REF' % (
+        IMAGE_NAME,
+        IMAGE_NAME
+    ),
     deps=[
-        ARTIFACT_PATH,
-        CRDGEN_ARTIFACT_PATH,
+        BINARY_PATH,  # File dependency ensures binary exists before Docker build
         'dockerfiles/Dockerfile.controller.dev',
-        './scripts/tilt/docker_build.py',
     ],
-    env={
-        'IMAGE_NAME': IMAGE_NAME,
-        'CONTROLLER_NAME': CONTROLLER_NAME,
-        'CONTROLLER_DIR': CONTROLLER_DIR,
-    },
     tag='tilt',
     live_update=[
-        # Sync the updated binary into the running container
-        sync(ARTIFACT_PATH, '/app/secret-manager-controller'),
-        # Restart the process to pick up the new binary
-        # For k8s resources, we use run() to send SIGTERM which triggers graceful shutdown
-        # Kubernetes will automatically restart the pod when the container exits
-        # This replaces the deprecated restart_container() function
-        # Note: The controller handles SIGTERM gracefully and will exit cleanly
-        # run() takes a command string and optional echo_off boolean
-        run('kill -TERM 1'),
+        sync(BINARY_PATH, '/app/secret-manager-controller'),
+        run('kill -HUP 1', trigger=[BINARY_PATH]),
     ],
-    skips_local_docker=False,
 )
 
 # ====================
@@ -325,7 +313,7 @@ k8s_yaml(kustomize('%s/config' % CONTROLLER_DIR))
 k8s_resource(
     CONTROLLER_NAME,
     labels=['controllers'],
-    resource_deps=['secret-manager-controller-build-and-copy', 'secret-manager-controller-crd-gen', 'fluxcd-install', 'sops-key-setup', 'ensure-microscaler-system-namespace'],
+    resource_deps=['secret-manager-controller-build', 'secret-manager-controller-crd-gen', 'fluxcd-install', 'sops-key-setup', 'ensure-microscaler-system-namespace'],
 )
 
 # ====================

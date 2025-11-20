@@ -14,6 +14,15 @@ spec:
         app: secret-manager-controller
     spec:
       serviceAccountName: secret-manager-controller
+      # Schedule only on dedicated controller node
+      # This isolates the controller's containerd storage usage from other workloads
+      nodeSelector:
+        controller-dedicated: "true"
+      tolerations:
+      - key: "controller-dedicated"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
       containers:
       - name: controller
         image: localhost:5000/secret-manager-controller
@@ -63,13 +72,13 @@ spec:
             path: /healthz
             port: metrics
           initialDelaySeconds: 10
-          periodSeconds: 10
+          periodSeconds: 15
         readinessProbe:
           httpGet:
             path: /readyz
             port: metrics
           initialDelaySeconds: 10
-          periodSeconds: 10
+          periodSeconds: 15
         resources:
           requests:
             cpu: 100m
@@ -78,10 +87,10 @@ spec:
             cpu: 500m
             memory: 512Mi
         volumeMounts:
-        - name: artifact-cache
+        - name: app-storage
           mountPath: /tmp/smc
       volumes:
-      - name: artifact-cache
+      - name: app-storage
         persistentVolumeClaim:
           claimName: secret-manager-controller-cache
 
