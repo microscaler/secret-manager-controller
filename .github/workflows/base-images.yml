@@ -54,13 +54,16 @@ jobs:
         image:
           - name: rust-builder-base-image
             dockerfile: dockerfiles/Dockerfile.base.rust-builder
-            full_name: ghcr.io/microscaler/rust-builder-base-image
+            ghcr_name: ghcr.io/microscaler/rust-builder-base-image
+            dockerhub_name: docker.io/microscaler/rust-builder-base-image
           - name: controller-base-image
             dockerfile: dockerfiles/Dockerfile.base.controller
-            full_name: ghcr.io/microscaler/secret-manager-controller-base-image
+            ghcr_name: ghcr.io/microscaler/secret-manager-controller-base-image
+            dockerhub_name: docker.io/microscaler/secret-manager-controller-base-image
           - name: pact-mock-server-base-image
             dockerfile: dockerfiles/Dockerfile.base.pact-mock-server
-            full_name: ghcr.io/microscaler/pact-mock-server-base-image
+            ghcr_name: ghcr.io/microscaler/pact-mock-server-base-image
+            dockerhub_name: docker.io/microscaler/pact-mock-server-base-image
     
     # Only build images that have changed or if manually triggered
     steps:
@@ -83,6 +86,12 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: microscaler
+          password: ${{ secrets.MICROSCALER_DOCKER }}
     
       - name: Check for changes
         id: check-changes
@@ -131,10 +140,12 @@ jobs:
           file: ${{ matrix.image.dockerfile }}
           push: true
           tags: |
-            ${{ matrix.image.full_name }}:${{ steps.version.outputs.version }}
-            ${{ matrix.image.full_name }}:latest
-          cache-from: type=registry,ref=${{ matrix.image.full_name }}:buildcache
-          cache-to: type=registry,ref=${{ matrix.image.full_name }}:buildcache,mode=max
+            ${{ matrix.image.ghcr_name }}:${{ steps.version.outputs.version }}
+            ${{ matrix.image.ghcr_name }}:latest
+            ${{ matrix.image.dockerhub_name }}:${{ steps.version.outputs.version }}
+            ${{ matrix.image.dockerhub_name }}:latest
+          cache-from: type=registry,ref=${{ matrix.image.ghcr_name }}:buildcache
+          cache-to: type=registry,ref=${{ matrix.image.ghcr_name }}:buildcache,mode=max
           platforms: linux/amd64
       
       - name: Set package visibility to public
@@ -143,7 +154,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/set_package_visibility.py \
-            "${{ matrix.image.full_name }}:${{ steps.version.outputs.version }}" \
+            "${{ matrix.image.ghcr_name }}:${{ steps.version.outputs.version }}" \
             --org "${{ env.REGISTRY_ORG }}" \
             --gh-token "${{ secrets.GITHUB_TOKEN }}" \
             --max-attempts 30 \

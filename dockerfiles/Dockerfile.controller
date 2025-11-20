@@ -42,7 +42,7 @@ RUN BUILD_GIT_HASH=${BUILD_GIT_HASH} \
 
 # Stage 2: Runtime image
 # Uses pre-built base image with all dependencies to avoid GPG issues and speed up builds
-FROM gchr.io/microscaler/secret-manager-controller-base-image:latest
+FROM ghcr.io/microscaler/secret-manager-controller-base-image:latest
 
 # Base image already has:
 # - git, curl, gnupg, ca-certificates
