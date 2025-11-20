@@ -55,47 +55,42 @@ CRDGEN_NATIVE_PATH = '%s/target/debug/crdgen' % CONTROLLER_DIR
 
 
 # ====================
-# Build and Copy Rust Binaries
+# CRD Generation
 # ====================
-# Build binaries on host (cross-compilation) and copy to build_artifacts
-
+# Generate CRD using crdgen binary - matches PriceWhisperer's pattern
 local_resource(
-    'secret-manager-controller-build-and-copy',
-    cmd='python3 scripts/tilt/build_and_copy_binaries.py',
+    'secret-manager-controller-crd-gen',
+    cmd='''
+        echo "🔄 Regenerating SecretManagerConfig CRD..."
+        cargo run --bin crdgen 2>/dev/null > config/crd/secretmanagerconfig.yaml
+        echo "✅ CRD regenerated: config/crd/secretmanagerconfig.yaml"
+    ''',
     deps=[
         '%s/src' % CONTROLLER_DIR,
         '%s/Cargo.toml' % CONTROLLER_DIR,
         '%s/Cargo.lock' % CONTROLLER_DIR,
-        './scripts/host_aware_build.py',
-        './scripts/copy_binary.py',
-        './scripts/tilt/build_and_copy_binaries.py',
     ],
-    env={
-        'CONTROLLER_DIR': CONTROLLER_DIR,
-        'BINARY_NAME': BINARY_NAME,
-    },
+    resource_deps=[],
     labels=['controllers'],
-    allow_parallel=False,
+    allow_parallel=True,
 )
 
 # ====================
-# CRD Generation
+# Build Rust Binary
 # ====================
-# Generate CRD using crdgen binary from build_artifacts
-
+# Build the controller binary for local development
+# Uses cargo zigbuild on macOS (like microservices) for cross-compilation
+# Matches PriceWhisperer's pattern but uses Python script for cleaner output
 local_resource(
-    'secret-manager-controller-crd-gen',
-    cmd='python3 scripts/tilt/generate_crd.py',
+    'secret-manager-controller-build',
+    cmd='python3 scripts/tilt/build_controller.py',
     deps=[
-        CRDGEN_NATIVE_PATH,
         '%s/src' % CONTROLLER_DIR,
         '%s/Cargo.toml' % CONTROLLER_DIR,
-        './scripts/tilt/generate_crd.py',
+        '%s/Cargo.lock' % CONTROLLER_DIR,
+        './scripts/tilt/build_controller.py',
     ],
-    env={
-        'CONTROLLER_DIR': CONTROLLER_DIR,
-    },
-    resource_deps=['secret-manager-controller-build-and-copy'],
+    resource_deps=[],
     labels=['controllers'],
     allow_parallel=True,
 )

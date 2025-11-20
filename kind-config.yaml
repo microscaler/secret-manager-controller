@@ -36,10 +36,8 @@ nodes:
       kubeletExtraArgs:
         node-labels: "controller-dedicated=true"
         register-with-taints: "controller-dedicated=true:NoSchedule"
-containerdConfigPatches:
-- |-
-  [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:5000"]
-    endpoint = ["http://kind-registry:5000"]
+# Note: Registry mirror configuration is handled dynamically by scripts/setup_kind.py
+# which uses the registry IP address for reliable connectivity
 networking:
   # Use unique pod and service subnets to avoid conflicts with other Kind clusters
   # Allocation: secret-manager-controller cluster (2nd in sequence)
