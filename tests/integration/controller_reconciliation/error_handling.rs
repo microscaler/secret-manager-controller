@@ -9,10 +9,10 @@
 #[cfg(test)]
 mod tests {
     use super::super::common::*;
+    use controller::controller::reconciler::reconcile;
+    use controller::controller::reconciler::types::{Reconciler, TriggerSource};
+    use controller::crd::SecretManagerConfig;
     use kube::api::{Api, PostParams};
-    use secret_manager_controller::controller::reconciler::reconcile;
-    use secret_manager_controller::controller::reconciler::types::{Reconciler, TriggerSource};
-    use secret_manager_controller::crd::SecretManagerConfig;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -114,10 +114,12 @@ mod tests {
         // but this requires modifying the controller's HTTP client to send headers.
         // For now, we verify the reconciliation flow works and can be extended.
 
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(created_config),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
 
@@ -212,10 +214,12 @@ mod tests {
                 .expect("Failed to create Reconciler"),
         );
 
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(created_config),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
 
@@ -303,10 +307,12 @@ mod tests {
                 .expect("Failed to create Reconciler"),
         );
 
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(created_config),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
 
@@ -404,10 +410,12 @@ mod tests {
         // 3. Verify controller retries with exponential backoff
         // 4. Verify reconciliation eventually succeeds
 
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(created_config),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
 
@@ -505,10 +513,12 @@ mod tests {
         // 3. Verify controller does NOT retry (permanent error)
         // 4. Verify status is updated to Failed with appropriate message
 
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(created_config),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
 
@@ -603,10 +613,12 @@ mod tests {
                 .expect("Failed to create Reconciler"),
         );
 
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(created_config),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
 
@@ -694,10 +706,12 @@ mod tests {
                 .expect("Failed to create Reconciler"),
         );
 
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(created_config),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
 

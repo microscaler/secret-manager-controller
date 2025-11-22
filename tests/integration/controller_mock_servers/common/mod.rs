@@ -6,10 +6,8 @@
 //! - Setting up test environments
 //! - Verifying secret state in mock servers
 
+use controller::{GcpConfig, ProviderConfig, SecretManagerConfig, SecretsConfig, SourceRef};
 use kube::Client;
-use secret_manager_controller::{
-    GcpConfig, ProviderConfig, SecretManagerConfig, SecretsConfig, SourceRef,
-};
 use serde_json::json;
 use std::env;
 use std::process::{Child, Command, Stdio};
@@ -208,6 +206,18 @@ async fn wait_for_server(
     Err(format!("Mock server did not become ready within {:?}", timeout).into())
 }
 
+/// Create a default SharedControllerConfig for tests
+/// Uses default values suitable for testing
+pub fn create_test_controller_config(
+) -> std::sync::Arc<tokio::sync::RwLock<controller::config::ControllerConfig>> {
+    use controller::config::ControllerConfig;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let config = ControllerConfig::default();
+    Arc::new(RwLock::new(config))
+}
+
 /// Create a test SecretManagerConfig for GCP
 pub fn create_gcp_test_config(
     name: &str,
@@ -221,11 +231,12 @@ pub fn create_gcp_test_config(
             namespace: Some(namespace.to_string()),
             ..Default::default()
         },
-        spec: secret_manager_controller::SecretManagerConfigSpec {
+        spec: controller::SecretManagerConfigSpec {
             source_ref: SourceRef {
                 kind: "GitRepository".to_string(),
                 name: "test-repo".to_string(),
                 namespace: "default".to_string(),
+                git_credentials: None,
             },
             provider: ProviderConfig::Gcp(GcpConfig {
                 project_id: project_id.to_string(),
@@ -247,6 +258,8 @@ pub fn create_gcp_test_config(
             suspend: false,
             suspend_git_pulls: false,
             notifications: None,
+            hot_reload: None,
+            logging: None,
         },
         status: None,
     }
@@ -259,18 +272,19 @@ pub fn create_aws_test_config(
     region: &str,
     _mock_server_endpoint: &str,
 ) -> SecretManagerConfig {
-    use secret_manager_controller::AwsConfig;
+    use controller::AwsConfig;
     SecretManagerConfig {
         metadata: kube::api::ObjectMeta {
             name: Some(name.to_string()),
             namespace: Some(namespace.to_string()),
             ..Default::default()
         },
-        spec: secret_manager_controller::SecretManagerConfigSpec {
+        spec: controller::SecretManagerConfigSpec {
             source_ref: SourceRef {
                 kind: "GitRepository".to_string(),
                 name: "test-repo".to_string(),
                 namespace: "default".to_string(),
+                git_credentials: None,
             },
             provider: ProviderConfig::Aws(AwsConfig {
                 region: region.to_string(),
@@ -292,6 +306,8 @@ pub fn create_aws_test_config(
             suspend: false,
             suspend_git_pulls: false,
             notifications: None,
+            hot_reload: None,
+            logging: None,
         },
         status: None,
     }
@@ -304,18 +320,19 @@ pub fn create_azure_test_config(
     vault_name: &str,
     _mock_server_endpoint: &str,
 ) -> SecretManagerConfig {
-    use secret_manager_controller::AzureConfig;
+    use controller::AzureConfig;
     SecretManagerConfig {
         metadata: kube::api::ObjectMeta {
             name: Some(name.to_string()),
             namespace: Some(namespace.to_string()),
             ..Default::default()
         },
-        spec: secret_manager_controller::SecretManagerConfigSpec {
+        spec: controller::SecretManagerConfigSpec {
             source_ref: SourceRef {
                 kind: "GitRepository".to_string(),
                 name: "test-repo".to_string(),
                 namespace: "default".to_string(),
+                git_credentials: None,
             },
             provider: ProviderConfig::Azure(AzureConfig {
                 vault_name: vault_name.to_string(),
@@ -337,6 +354,8 @@ pub fn create_azure_test_config(
             suspend: false,
             suspend_git_pulls: false,
             notifications: None,
+            hot_reload: None,
+            logging: None,
         },
         status: None,
     }

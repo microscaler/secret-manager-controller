@@ -1,0 +1,12 @@
+[package]
+name = "paths"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Shared API path definitions for GCP, AWS, and Azure providers"
+
+[lib]
+name = "paths"
+path = "src/lib.rs"
+

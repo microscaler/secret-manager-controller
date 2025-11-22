@@ -19,14 +19,19 @@ ARG BUILD_DATETIME
 # - Working directory (/build)
 # - Environment variables (CARGO_NET_GIT_FETCH_WITH_CLI, RUST_BACKTRACE)
 
-# Copy Cargo files first for better layer caching
+# Copy workspace Cargo files first for better layer caching
 COPY Cargo.toml Cargo.lock ./
 
+# Copy crate Cargo files
+COPY crates/controller/Cargo.toml ./crates/controller/
+COPY crates/gcp-api-paths/Cargo.toml ./crates/gcp-api-paths/
+
 # Copy build script (needed for build-time git hash)
-COPY build.rs ./
+COPY crates/controller/build.rs ./crates/controller/
 
 # Copy source code
-COPY src ./src
+COPY crates/controller/src ./crates/controller/src
+COPY crates/gcp-api-paths/src ./crates/gcp-api-paths/src
 COPY config ./config
 
 # Build the binary in release mode

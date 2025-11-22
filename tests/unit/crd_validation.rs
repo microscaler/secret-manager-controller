@@ -4,7 +4,7 @@
 //! These tests validate that all fields can be deserialized correctly and
 //! that sample resources match the expected schema.
 
-use secret_manager_controller::crd::{
+use controller::crd::{
     AwsAuthConfig, AwsConfig, AzureAuthConfig, AzureConfig, ConfigsConfig, ConfigStoreType,
     GcpAuthConfig, GcpConfig, OtelConfig, ProviderConfig, SecretManagerConfig, SecretsConfig,
     SourceRef,

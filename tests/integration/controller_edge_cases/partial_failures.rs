@@ -11,9 +11,9 @@
 #[cfg(test)]
 mod tests {
     use super::super::super::controller_mock_servers::common::*;
-    use secret_manager_controller::controller::reconciler::reconcile;
-    use secret_manager_controller::controller::reconciler::types::{Reconciler, TriggerSource};
-    use secret_manager_controller::{GcpConfig, ProviderConfig, SecretManagerConfig, SecretsConfig, SourceRef};
+    use controller::controller::reconciler::reconcile;
+    use controller::controller::reconciler::types::{Reconciler, TriggerSource};
+    use controller::{GcpConfig, ProviderConfig, SecretManagerConfig, SecretsConfig, SourceRef};
     use kube::api::Api;
     use kube_runtime::controller::Action;
     use std::sync::Arc;
@@ -31,18 +31,19 @@ mod tests {
         gitrepo_name: &str,
         gitrepo_namespace: &str,
     ) -> SecretManagerConfig {
-        use secret_manager_controller::{GcpConfig, ProviderConfig, SecretsConfig};
+        use controller::{GcpConfig, ProviderConfig, SecretsConfig};
         SecretManagerConfig {
             metadata: kube::core::ObjectMeta {
                 name: Some(name.to_string()),
                 namespace: Some(namespace.to_string()),
                 ..Default::default()
             },
-            spec: secret_manager_controller::SecretManagerConfigSpec {
+            spec: controller::SecretManagerConfigSpec {
                 source_ref: SourceRef {
                     kind: "GitRepository".to_string(),
                     name: gitrepo_name.to_string(),
                     namespace: gitrepo_namespace.to_string(),
+                    git_credentials: None,
                 },
                 provider: ProviderConfig::Gcp(GcpConfig {
                     project_id: "test-project".to_string(),
@@ -64,6 +65,8 @@ mod tests {
                 suspend: false,
                 suspend_git_pulls: false,
                 notifications: None,
+            hot_reload: None,
+            logging: None,
             },
             status: None,
         }
@@ -123,11 +126,8 @@ mod tests {
         let _ = smc_api.create(&Default::default(), &*config).await;
 
         // Trigger reconciliation
-        let result = reconcile(
-            config.clone(),
-            reconciler,
-            TriggerSource::ManualCli,
-        )
+        let controller_config = create_test_controller_config();
+        let result = reconcile(config.clone(), reconciler, TriggerSource::ManualCli, controller_config)
         .await;
 
         // For partial failures, the controller should:

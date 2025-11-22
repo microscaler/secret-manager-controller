@@ -29,12 +29,12 @@ build: build-rust build-docker
 # Build Rust binary (debug)
 build-rust:
     @echo "🔨 Building Rust binary..."
-    @cargo build
+    @cargo build --workspace
 
 # Build Rust binary (release)
 build-release:
     @echo "🔨 Building Rust binary (release)..."
-    @cargo build --release
+    @cargo build --workspace --release
 
 
 # Build Docker image (development)
@@ -50,13 +50,13 @@ build-docker-prod:
 # Generate CRD from Rust code
 generate-crd:
     @echo "📝 Generating CRD..."
-    @cargo run --bin crdgen > config/crd/secretmanagerconfig.yaml
+    @cargo run -p controller --bin crdgen > config/crd/secretmanagerconfig.yaml
     @echo "✅ CRD generated: config/crd/secretmanagerconfig.yaml"
 
 # Build CLI tool (msmctl)
 build-cli:
     @echo "🔨 Building CLI tool (msmctl)..."
-    @cargo build --release --bin msmctl
+    @cargo build --workspace --release --bin msmctl
     @echo "✅ CLI built: target/release/msmctl"
 
 # ============================================================================
@@ -69,12 +69,12 @@ test: test-unit test-pact
 # Run unit tests
 test-unit:
     @echo "🧪 Running unit tests..."
-    @cargo test --lib --no-fail-fast
+    @cargo test --workspace --lib --no-fail-fast
 
 # Run unit tests with output
 test-unit-verbose:
     @echo "🧪 Running unit tests (verbose)..."
-    @cargo test --lib -- --nocapture --no-fail-fast
+    @cargo test --workspace --lib -- --nocapture --no-fail-fast
 
 # Run Pact contract tests
 test-pact:
@@ -104,11 +104,11 @@ test-coverage:
 # Build mock servers for integration tests
 int-build:
     @echo "🔨 Building mock servers for integration tests..."
-    @cd pact-broker/mock-server && cargo build --release --bins
+    @cargo build --workspace --release --bins
     @echo "✅ Mock servers built:"
-    @echo "   - pact-broker/mock-server/target/release/gcp-mock-server"
-    @echo "   - pact-broker/mock-server/target/release/aws-mock-server"
-    @echo "   - pact-broker/mock-server/target/release/azure-mock-server"
+    @echo "   - target/release/gcp-mock-server"
+    @echo "   - target/release/aws-mock-server"
+    @echo "   - target/release/azure-mock-server"
 
 # Run controller integration tests with mock servers
 # Note: Requires mock servers to be built (run 'just int-build' first)
@@ -153,7 +153,7 @@ audit:
 # Check code (compile without building)
 check:
     @echo "✅ Checking code..."
-    @cargo check --all-targets
+    @cargo check --workspace --all-targets
 
 # Validate all (format, lint, check, tests)
 validate: fmt-check lint check test-unit
@@ -230,7 +230,7 @@ install-cli: build-cli
 # Run CLI tool (development)
 # Usage: just cli reconcile --name my-secrets
 cli *args:
-    @cargo run --bin msmctl -- {{args}}
+    @cargo run -p controller --bin msmctl -- {{args}}
 
 # ============================================================================
 # Documentation

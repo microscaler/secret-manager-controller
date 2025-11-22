@@ -3,10 +3,8 @@
 //! Utilities for creating test fixtures including SecretManagerConfig resources,
 //! test secret files, and managing test data.
 
+use controller::{AwsConfig, AzureConfig, GcpConfig, ProviderConfig, SecretManagerConfig};
 use kube::Client;
-use secret_manager_controller::{
-    AwsConfig, AzureConfig, GcpConfig, ProviderConfig, SecretManagerConfig,
-};
 use std::env;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -57,13 +55,14 @@ pub fn create_test_secret_manager_config_flux_with_options(
             namespace: Some(namespace.to_string()),
             ..Default::default()
         },
-        spec: secret_manager_controller::SecretManagerConfigSpec {
-            source_ref: secret_manager_controller::SourceRef {
+        spec: controller::SecretManagerConfigSpec {
+            source_ref: controller::SourceRef {
                 kind: "GitRepository".to_string(),
                 name: git_repo_name.to_string(),
                 namespace: git_repo_namespace.to_string(),
+                git_credentials: None,
             },
-            secrets: secret_manager_controller::SecretsConfig {
+            secrets: controller::SecretsConfig {
                 environment: environment.to_string(),
                 prefix: Some("test-service".to_string()),
                 suffix: None,
@@ -83,6 +82,8 @@ pub fn create_test_secret_manager_config_flux_with_options(
             suspend: false,
             suspend_git_pulls: false,
             notifications: None,
+            hot_reload: None,
+            logging: None,
         },
         status: None,
     }
@@ -108,13 +109,14 @@ pub fn create_test_secret_manager_config_argocd(
             namespace: Some(namespace.to_string()),
             ..Default::default()
         },
-        spec: secret_manager_controller::SecretManagerConfigSpec {
-            source_ref: secret_manager_controller::SourceRef {
+        spec: controller::SecretManagerConfigSpec {
+            source_ref: controller::SourceRef {
                 kind: "Application".to_string(),
                 name: app_name.to_string(),
                 namespace: app_namespace.to_string(),
+                git_credentials: None,
             },
-            secrets: secret_manager_controller::SecretsConfig {
+            secrets: controller::SecretsConfig {
                 environment: environment.to_string(),
                 prefix: Some("test-service".to_string()),
                 suffix: None,
@@ -134,6 +136,8 @@ pub fn create_test_secret_manager_config_argocd(
             suspend: false,
             suspend_git_pulls: false,
             notifications: None,
+            hot_reload: None,
+            logging: None,
         },
         status: None,
     }
@@ -159,13 +163,14 @@ pub fn create_test_secret_manager_config_aws_flux(
             namespace: Some(namespace.to_string()),
             ..Default::default()
         },
-        spec: secret_manager_controller::SecretManagerConfigSpec {
-            source_ref: secret_manager_controller::SourceRef {
+        spec: controller::SecretManagerConfigSpec {
+            source_ref: controller::SourceRef {
                 kind: "GitRepository".to_string(),
                 name: git_repo_name.to_string(),
                 namespace: git_repo_namespace.to_string(),
+                git_credentials: None,
             },
-            secrets: secret_manager_controller::SecretsConfig {
+            secrets: controller::SecretsConfig {
                 environment: environment.to_string(),
                 prefix: Some("test-service".to_string()),
                 suffix: None,
@@ -185,6 +190,8 @@ pub fn create_test_secret_manager_config_aws_flux(
             suspend: false,
             suspend_git_pulls: false,
             notifications: None,
+            hot_reload: None,
+            logging: None,
         },
         status: None,
     }
@@ -210,13 +217,14 @@ pub fn create_test_secret_manager_config_aws_argocd(
             namespace: Some(namespace.to_string()),
             ..Default::default()
         },
-        spec: secret_manager_controller::SecretManagerConfigSpec {
-            source_ref: secret_manager_controller::SourceRef {
+        spec: controller::SecretManagerConfigSpec {
+            source_ref: controller::SourceRef {
                 kind: "Application".to_string(),
                 name: app_name.to_string(),
                 namespace: app_namespace.to_string(),
+                git_credentials: None,
             },
-            secrets: secret_manager_controller::SecretsConfig {
+            secrets: controller::SecretsConfig {
                 environment: environment.to_string(),
                 prefix: Some("test-service".to_string()),
                 suffix: None,
@@ -236,6 +244,8 @@ pub fn create_test_secret_manager_config_aws_argocd(
             suspend: false,
             suspend_git_pulls: false,
             notifications: None,
+            hot_reload: None,
+            logging: None,
         },
         status: None,
     }
@@ -261,13 +271,14 @@ pub fn create_test_secret_manager_config_azure_flux(
             namespace: Some(namespace.to_string()),
             ..Default::default()
         },
-        spec: secret_manager_controller::SecretManagerConfigSpec {
-            source_ref: secret_manager_controller::SourceRef {
+        spec: controller::SecretManagerConfigSpec {
+            source_ref: controller::SourceRef {
                 kind: "GitRepository".to_string(),
                 name: git_repo_name.to_string(),
                 namespace: git_repo_namespace.to_string(),
+                git_credentials: None,
             },
-            secrets: secret_manager_controller::SecretsConfig {
+            secrets: controller::SecretsConfig {
                 environment: environment.to_string(),
                 prefix: Some("test-service".to_string()),
                 suffix: None,
@@ -287,6 +298,8 @@ pub fn create_test_secret_manager_config_azure_flux(
             suspend: false,
             suspend_git_pulls: false,
             notifications: None,
+            hot_reload: None,
+            logging: None,
         },
         status: None,
     }
@@ -312,13 +325,14 @@ pub fn create_test_secret_manager_config_azure_argocd(
             namespace: Some(namespace.to_string()),
             ..Default::default()
         },
-        spec: secret_manager_controller::SecretManagerConfigSpec {
-            source_ref: secret_manager_controller::SourceRef {
+        spec: controller::SecretManagerConfigSpec {
+            source_ref: controller::SourceRef {
                 kind: "Application".to_string(),
                 name: app_name.to_string(),
                 namespace: app_namespace.to_string(),
+                git_credentials: None,
             },
-            secrets: secret_manager_controller::SecretsConfig {
+            secrets: controller::SecretsConfig {
                 environment: environment.to_string(),
                 prefix: Some("test-service".to_string()),
                 suffix: None,
@@ -338,6 +352,8 @@ pub fn create_test_secret_manager_config_azure_argocd(
             suspend: false,
             suspend_git_pulls: false,
             notifications: None,
+            hot_reload: None,
+            logging: None,
         },
         status: None,
     }

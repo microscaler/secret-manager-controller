@@ -5,7 +5,7 @@
 
 #[cfg(test)]
 mod tests {
-    use secret_manager_controller::controller::reconciler::{
+    use controller::controller::reconciler::{
         construct_secret_name, sanitize_secret_name,
     };
 

@@ -14,10 +14,10 @@
 mod common;
 
 use common::init_rustls;
+use controller::provider::aws::AwsSecretManager;
+use controller::provider::SecretManagerProvider;
+use controller::AwsConfig;
 use pact_consumer::prelude::*;
-use secret_manager_controller::provider::aws::AwsSecretManager;
-use secret_manager_controller::provider::SecretManagerProvider;
-use secret_manager_controller::AwsConfig;
 use serde_json::json;
 use std::env;
 use std::sync::Once;

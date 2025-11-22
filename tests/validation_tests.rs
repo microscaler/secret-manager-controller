@@ -9,13 +9,13 @@
 //! - Path and URL validation
 //! - Secret name component validation
 
-use secret_manager_controller::controller::reconciler::validation::{
+use controller::controller::reconciler::validation::{
     parse_kubernetes_duration, validate_aws_parameter_path, validate_duration_interval,
     validate_kubernetes_label, validate_kubernetes_name, validate_kubernetes_namespace,
     validate_path, validate_provider_config, validate_secret_name_component,
     validate_source_ref_kind, validate_url,
 };
-use secret_manager_controller::crd::{AwsConfig, AzureConfig, GcpConfig, ProviderConfig};
+use controller::crd::{AwsConfig, AzureConfig, GcpConfig, ProviderConfig};
 
 #[test]
 fn test_validate_kubernetes_name_valid() {

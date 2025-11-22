@@ -31,7 +31,13 @@ def get_kind_nodes():
 
 
 def cleanup_containerd_storage(node):
-    """Clean up containerd storage on a Kind node."""
+    """Clean up containerd storage on a Kind node.
+    
+    Aggressively cleans up containerd storage to free disk space:
+    - Removes unused images (including those not referenced by any container)
+    - Removes unused snapshots
+    - Removes unused content (blobs)
+    """
     print(f"🧹 Cleaning up containerd storage on {node}...")
     
     # Run containerd garbage collection inside the node
@@ -56,6 +62,18 @@ def cleanup_containerd_storage(node):
         print(f"  ✅ Cleaned up unused snapshots on {node}")
     else:
         print(f"  ⚠️  Warning: Failed to clean up snapshots on {node}", file=sys.stderr)
+    
+    # Aggressively clean up unused content (blobs)
+    # This removes blobs that are not referenced by any image or snapshot
+    result = run_command(
+        f"docker exec {node} ctr content prune",
+        check=False
+    )
+    
+    if result.returncode == 0:
+        print(f"  ✅ Cleaned up unused content (blobs) on {node}")
+    else:
+        print(f"  ⚠️  Warning: Failed to clean up content on {node}", file=sys.stderr)
     
     # Check disk usage
     result = run_command(

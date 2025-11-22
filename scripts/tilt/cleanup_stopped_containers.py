@@ -406,14 +406,14 @@ def cleanup_registry_images():
 
 
 def cleanup_old_tilt_images():
-    """Remove old Tilt images, keeping only the last 2 per service.
+    """Remove old Tilt images, keeping only the current running image per service.
     
-    For Tilt deployments, we only need the last 2 images per service.
-    This keeps disk usage low while maintaining rollback capability.
+    For Tilt deployments in dev environment, we only need the current running image.
+    No rollback capability needed in dev, so we keep only 1 image per service.
     
     CRITICAL: Never removes infrastructure images like kindest/node or registry:2.
     """
-    print("🏷️  Removing old Tilt images (keeping last 2 per service)...")
+    print("🏷️  Removing old Tilt images (keeping current running image per service)...")
     
     # CRITICAL: List of infrastructure images that must NEVER be removed
     # These are used by Kind clusters, local registries, and base images
@@ -433,7 +433,7 @@ def cleanup_old_tilt_images():
     }
     
     # Get all images with tilt-* tags (all Tilt services)
-    # Group by repository and keep only the 2 most recent per repository
+    # Group by repository and keep only the most recent (current running) per repository
     result = run_command(
         ["docker", "images", "--format", "{{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedAt}}"],
         check=False
@@ -468,7 +468,7 @@ def cleanup_old_tilt_images():
     removed_count = 0
     kept_count = 0
     
-    # For each repository, keep only the 2 most recent images
+    # For each repository, keep only the most recent (current running) image
     for repo, images in repos.items():
         repo_tag_prefix = f"{repo}:"
         
@@ -503,9 +503,9 @@ def cleanup_old_tilt_images():
         # Sort by creation date (newest first)
         images.sort(key=lambda x: x[0], reverse=True)
         
-        # Keep the 2 most recent, remove the rest
-        if len(images) > 2:
-            for created, img_id, tag in images[2:]:  # Skip first 2 (most recent)
+        # Keep only the most recent (current running), remove the rest
+        if len(images) > 1:
+            for created, img_id, tag in images[1:]:  # Skip first 1 (most recent/current)
                 repo_tag = f"{repo}:{tag}"
                 # CRITICAL: Remove by repository:tag, NOT by image ID
                 # Removing by ID can delete shared layers used by other images (like kindest/node)
@@ -515,11 +515,11 @@ def cleanup_old_tilt_images():
                     print(f"    Removed (old): {repo_tag}")
                 else:
                     print(f"    ⚠️  Failed to remove: {repo_tag}", file=sys.stderr)
-            kept_count += 2
+            kept_count += 1
         else:
             kept_count += len(images)
     
-    print(f"  ✅ Removed {removed_count} old Tilt image(s), kept {kept_count} image(s) (last 2 per service)")
+    print(f"  ✅ Removed {removed_count} old Tilt image(s), kept {kept_count} image(s) (current running per service)")
     return True
 
 

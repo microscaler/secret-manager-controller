@@ -44,7 +44,7 @@ def main():
     binary_path = Path("build_artifacts/mock-server/webhook")
     if not binary_path.exists():
         print(f"❌ Error: Binary not found: {binary_path}", file=sys.stderr)
-        print("   Please run the webhook-build resource first", file=sys.stderr)
+        print("   Please run the build-all-binaries resource first", file=sys.stderr)
         sys.exit(1)
     
     dockerfile = Path("dockerfiles/Dockerfile.pact-webhook")

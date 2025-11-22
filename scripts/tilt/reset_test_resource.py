@@ -156,27 +156,69 @@ Examples:
         print(f"  Namespace: {resource['namespace']}")
         print(f"  Reconcile Interval: {resource['reconcile_interval']}")
         
-        # Apply using kustomize to ensure namespace and all resources are created
-        # First ensure namespace exists, then apply SecretManagerConfig
-        # GitRepository might already exist or require different permissions
+        # Step 0: Ensure namespace exists
+        # Namespaces are now managed at the top level (gitops/cluster/namespaces/namespace.yaml)
+        # We need to apply the namespace from the top-level file
+        namespace_file = Path("gitops/cluster/namespaces/namespace.yaml")
+        if namespace_file.exists():
+            # Apply namespace (kubectl apply is idempotent, so this is safe)
+            namespace_result = subprocess.run(
+                ["kubectl", "apply", "-f", str(namespace_file)],
+                capture_output=True,
+                text=True
+            )
+            if namespace_result.returncode != 0:
+                print(f"  Status: ❌ Failed - Could not apply namespace")
+                print(f"  Error: {namespace_result.stderr[:60] if namespace_result.stderr else 'Unknown error'}")
+                failed_resources.append(resource)
+                continue
         
-        # Step 1: Apply namespace
-        namespace_file = resource["kustomize_path"] / "namespace.yaml"
-        namespace_result = subprocess.run(
-            ["kubectl", "apply", "-f", str(namespace_file)],
-            capture_output=True,
-            text=True
-        )
+        # Apply using kustomize to ensure all resources are created
+        # We apply all SecretManagerConfig files (aws, azure, gcp) for the environment
         
-        # Step 2: Apply SecretManagerConfig (main resource we care about)
-        secretmanagerconfig_file = resource["kustomize_path"] / "secretmanagerconfig.yaml"
-        apply_result = subprocess.run(
-            ["kubectl", "apply", "-f", str(secretmanagerconfig_file)],
-            capture_output=True,
-            text=True
-        )
+        # Step 1: Apply all SecretManagerConfig files for this environment
+        # Files are named: secretmanagerconfig-aws.yaml, secretmanagerconfig-azure.yaml, secretmanagerconfig-gcp.yaml
+        secretmanagerconfig_files = [
+            resource["kustomize_path"] / "secretmanagerconfig-aws.yaml",
+            resource["kustomize_path"] / "secretmanagerconfig-azure.yaml",
+            resource["kustomize_path"] / "secretmanagerconfig-gcp.yaml",
+        ]
         
-        # Step 3: Try to apply GitRepository (optional - might fail if already exists or no permissions)
+        # Check which files exist (all should exist, but be defensive)
+        existing_files = [f for f in secretmanagerconfig_files if f.exists()]
+        
+        if not existing_files:
+            print(f"  Status: ❌ Failed - No SecretManagerConfig files found")
+            failed_resources.append(resource)
+            continue
+        
+        # Apply all SecretManagerConfig files
+        apply_results = []
+        for config_file in existing_files:
+            apply_result = subprocess.run(
+                ["kubectl", "apply", "-f", str(config_file)],
+                capture_output=True,
+                text=True
+            )
+            apply_results.append((config_file, apply_result))
+        
+        # Check if all applies succeeded
+        failed_applies = [r for r in apply_results if r[1].returncode != 0]
+        all_succeeded = len(failed_applies) == 0
+        
+        if failed_applies:
+            # At least one apply failed
+            print(f"  Status: ❌ Failed")
+            for config_file, result in failed_applies:
+                error_msg = result.stderr[:60].replace('\n', ' ') if result.stderr else "Unknown error"
+                print(f"    - {config_file.name}: {error_msg}")
+            failed_resources.append(resource)
+            apply_result = failed_applies[0][1]  # Use first failure for compatibility
+        else:
+            # All applies succeeded
+            apply_result = subprocess.CompletedProcess([], 0, "", "")  # Success result
+        
+        # Step 2: Try to apply GitRepository (optional - might fail if already exists or no permissions)
         gitrepository_file = resource["kustomize_path"] / "gitrepository.yaml"
         gitrepo_result = subprocess.run(
             ["kubectl", "apply", "-f", str(gitrepository_file)],
@@ -184,10 +226,10 @@ Examples:
             text=True
         )
         
-        # Success if SecretManagerConfig was applied successfully
+        # Success if all SecretManagerConfig files were applied successfully
         # GitRepository failure is acceptable (might already exist or require different permissions)
-        if apply_result.returncode == 0:
-            print(f"  Status: ✅ Applied successfully")
+        if all_succeeded:
+            print(f"  Status: ✅ Applied successfully ({len(existing_files)} SecretManagerConfig file(s))")
             # Only show GitRepository note if it failed AND it's not a common expected error
             if gitrepo_result.returncode != 0:
                 gitrepo_error = gitrepo_result.stderr.lower() if gitrepo_result.stderr else ""
@@ -200,13 +242,6 @@ Examples:
                     # Show unexpected errors
                     error_msg = gitrepo_result.stderr[:50].replace('\n', ' ')
                     print(f"  Note: GitRepository: {error_msg}")
-        else:
-            print(f"  Status: ❌ Failed (exit code: {apply_result.returncode})")
-            failed_resources.append(resource)
-            if apply_result.stderr:
-                # Print error details (truncated if too long)
-                error_msg = apply_result.stderr[:60].replace('\n', ' ')
-                print(f"  Error: {error_msg}")
         
         if resource != test_resources[-1]:
             print("")

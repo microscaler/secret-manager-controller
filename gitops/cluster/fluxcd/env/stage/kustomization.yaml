@@ -4,11 +4,12 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - namespace.yaml
   - gitrepository.yaml
-  - secretmanagerconfig.yaml
+  - secretmanagerconfig-gcp.yaml  # GCP
+  - secretmanagerconfig-aws.yaml  # AWS
+  - secretmanagerconfig-azure.yaml  # Azure
 
-# All resources are in the tilt namespace:
-# - Namespace: tilt (defined in namespace.yaml)
-# - GitRepository: tilt (defined in gitrepository.yaml) - FluxCD source
-# - SecretManagerConfig: tilt (defined in secretmanagerconfig.yaml) - references GitRepository
+# All resources are in the stage namespace:
+# - Namespace: stage (defined in namespaces/namespace.yaml at top level)
+# - GitRepository: stage (defined in gitrepository.yaml) - FluxCD source
+# - SecretManagerConfig: stage (defined in secretmanagerconfig.yaml) - references GitRepository

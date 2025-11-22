@@ -22,6 +22,20 @@ spec:
         app: aws-mock-server
         provider: aws
     spec:
+      # Distribute workloads across nodes to avoid disk space issues
+      # The controller-dedicated node is tainted, so workloads won't schedule there
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/part-of
+                  operator: In
+                  values:
+                  - secret-manager-controller
+              topologyKey: kubernetes.io/hostname
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001

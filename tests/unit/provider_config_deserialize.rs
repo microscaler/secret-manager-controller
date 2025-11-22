@@ -1,6 +1,6 @@
 //! Test that ProviderConfig can deserialize with or without the `type` field
 
-use secret_manager_controller::crd::provider::ProviderConfig;
+use controller::crd::provider::ProviderConfig;
 
 #[test]
 fn test_provider_config_deserialize_with_type_field() {

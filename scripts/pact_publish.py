@@ -170,17 +170,40 @@ def run_pact_tests() -> int:
     # Run tests sequentially to avoid environment variable conflicts
     # Integration tests share environment variables (PACT_MODE, endpoint URLs, etc.)
     # and must run one at a time to prevent interference
-    cmd = ["cargo", "test", "--test", "pact_*", "--no-fail-fast", "--", "--test-threads=1"]
-    try:
-        result = run_command(cmd, check=False)
-        if result.returncode == 0:
-            print("✅ Pact tests passed")
-        else:
-            print(f"⚠️  Pact tests exited with code {result.returncode}")
-        return result.returncode
-    except Exception as e:
-        print(f"❌ Error running Pact tests: {e}")
+    # Cargo test --test doesn't support glob patterns, so we need to run each test file individually
+    pact_test_files = [
+        "pact_aws_parameter_store",
+        "pact_aws_secrets_manager",
+        "pact_azure_app_configuration",
+        "pact_azure_key_vault",
+        "pact_gcp_parameter_manager",
+        "pact_gcp_secret_manager",
+        "pact_provider_integration_aws",
+        "pact_provider_integration_azure",
+        "pact_provider_integration_gcp",
+    ]
+    
+    failed_tests = []
+    for test_file in pact_test_files:
+        print(f"\n📋 Running {test_file} tests...")
+        cmd = ["cargo", "test", "--test", test_file, "--no-fail-fast", "--", "--test-threads=1"]
+        try:
+            result = run_command(cmd, check=False)
+            if result.returncode != 0:
+                print(f"⚠️  {test_file} tests failed with exit code {result.returncode}")
+                failed_tests.append(test_file)
+            else:
+                print(f"✅ {test_file} tests passed")
+        except Exception as e:
+            print(f"❌ Error running {test_file} tests: {e}")
+            failed_tests.append(test_file)
+    
+    if failed_tests:
+        print(f"\n❌ {len(failed_tests)} test file(s) failed: {', '.join(failed_tests)}")
         return 1
+    else:
+        print("\n✅ All Pact tests passed")
+        return 0
 
 
 def get_git_info() -> Tuple[str, str]:

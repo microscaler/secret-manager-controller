@@ -49,24 +49,26 @@ rules:
 # Access SOPS private key secrets across all namespaces
 # The controller watches for SOPS secrets in all namespaces (tilt, dev, stage, prod, etc.)
 # to detect changes and hot-reload the key without restarting
-# Note: list/watch must be on all secrets (watcher needs to list first), but controller filters to specific names
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - list
-  - watch
-# Allow get on specific secret names in all namespaces
-# This allows the controller to load SOPS keys from any namespace where they exist
+# Note: Kubernetes watch API requires get permission on resources being watched
+# The controller filters to specific secret names in code, so this is safe
 - apiGroups:
   - ""
   resources:
   - secrets
   verbs:
   - get
+  - list
+  - watch
+# Watch ConfigMap for controller configuration hot-reload
+# The controller watches its own ConfigMap to reload configuration without restart
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
   resourceNames:
-  - sops-private-key
-  - sops-gpg-key
-  - gpg-key
+  - secret-manager-controller-config
 

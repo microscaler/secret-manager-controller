@@ -8,10 +8,10 @@
 //! - Error propagation and wrapping
 //! - SOPS error classification
 
-use secret_manager_controller::controller::parser::sops::error::{
+use controller::controller::parser::sops::error::{
     classify_sops_error, SopsDecryptionFailureReason,
 };
-use secret_manager_controller::controller::reconciler::status::calculate_progressive_backoff;
+use controller::controller::reconciler::status::calculate_progressive_backoff;
 
 #[test]
 fn test_backoff_calculation_fibonacci_sequence() {

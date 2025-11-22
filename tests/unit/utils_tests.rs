@@ -7,7 +7,7 @@
 //! - Secret name sanitization
 //! - Path component sanitization
 
-use secret_manager_controller::controller::reconciler::utils::{
+use controller::controller::reconciler::utils::{
     construct_secret_name, sanitize_path_component, sanitize_secret_name,
 };
 

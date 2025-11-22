@@ -17,9 +17,9 @@
 mod common;
 
 use common::init_rustls;
+use controller::provider::gcp::SecretManagerREST;
+use controller::provider::SecretManagerProvider;
 use pact_consumer::prelude::*;
-use secret_manager_controller::provider::gcp::SecretManagerREST;
-use secret_manager_controller::provider::SecretManagerProvider;
 use serde_json::json;
 use std::env;
 use std::sync::Once;

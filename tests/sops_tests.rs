@@ -8,10 +8,10 @@
 //! - Error handling for missing keys, invalid files, etc.
 //! - Security: No disk writes (stdin/stdout pipes only)
 
-use secret_manager_controller::controller::parser::sops::error::{
+use controller::controller::parser::sops::error::{
     classify_sops_error, SopsDecryptionFailureReason,
 };
-use secret_manager_controller::controller::parser::{decrypt_sops_content, is_sops_encrypted};
+use controller::controller::parser::{decrypt_sops_content, is_sops_encrypted};
 use std::env;
 use std::path::PathBuf;
 
@@ -382,7 +382,7 @@ DATABASE_URL: ENC[AES256_GCM,data:test,iv:test,tag:test,type:str]
 
 #[test]
 fn test_file_type_detection_from_path() {
-    use secret_manager_controller::controller::parser::sops::is_sops_encrypted;
+    use controller::controller::parser::sops::is_sops_encrypted;
 
     // Test that ENC pattern detection works for dotenv files
     let dotenv_content = "DATABASE_URL=ENC[AES256_GCM,data:test,iv:test,tag:test,type:str]\nANOTHER_KEY=ENC[AES256_GCM,data:test2,iv:test2,tag:test2,type:str]";
@@ -395,7 +395,7 @@ fn test_file_type_detection_from_path() {
 
 #[test]
 fn test_error_classification_with_exit_codes() {
-    use secret_manager_controller::controller::parser::sops::error::classify_sops_error;
+    use controller::controller::parser::sops::error::classify_sops_error;
 
     // Test exit code 3 (KeyNotFound) - most reliable classification
     let reason = classify_sops_error("some error", Some(3));
@@ -508,8 +508,8 @@ async fn test_decrypt_with_malformed_key_fails() {
 
 #[test]
 fn test_parse_secrets_error_propagation() {
-    use secret_manager_controller::controller::parser::parsers::ParseSecretsError;
-    use secret_manager_controller::controller::parser::sops::error::{
+    use controller::controller::parser::parsers::ParseSecretsError;
+    use controller::controller::parser::sops::error::{
         SopsDecryptionError, SopsDecryptionFailureReason,
     };
 
@@ -533,7 +533,7 @@ fn test_parse_secrets_error_propagation() {
 
 #[test]
 fn test_transient_vs_permanent_errors() {
-    use secret_manager_controller::controller::parser::sops::error::SopsDecryptionFailureReason;
+    use controller::controller::parser::sops::error::SopsDecryptionFailureReason;
 
     // Permanent errors
     let permanent_reasons = vec![

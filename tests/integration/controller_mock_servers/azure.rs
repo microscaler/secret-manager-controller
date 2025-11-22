@@ -11,8 +11,8 @@
 #[cfg(test)]
 mod tests {
     use super::super::common::*;
-    use secret_manager_controller::controller::reconciler::reconcile;
-    use secret_manager_controller::controller::reconciler::types::{Reconciler, TriggerSource};
+    use controller::controller::reconciler::reconcile;
+    use controller::controller::reconciler::types::{Reconciler, TriggerSource};
     use serde_json::json;
     use std::sync::Arc;
 
@@ -60,7 +60,14 @@ mod tests {
         );
 
         // Trigger reconciliation
-        let result = reconcile(Arc::new(config), reconciler, TriggerSource::ManualCli).await;
+        let controller_config = create_test_controller_config();
+        let result = reconcile(
+            Arc::new(config),
+            reconciler,
+            TriggerSource::ManualCli,
+            controller_config,
+        )
+        .await;
 
         // Verify reconciliation succeeded
         assert!(result.is_ok(), "Reconciliation should succeed");

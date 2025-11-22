@@ -8,10 +8,10 @@
 mod tests {
     use super::super::common::fixtures::create_test_secret_manager_config_flux_with_options;
     use super::super::common::*;
+    use controller::controller::reconciler::reconcile;
+    use controller::controller::reconciler::types::{Reconciler, TriggerSource};
+    use controller::crd::SecretManagerConfig;
     use kube::api::{Api, PostParams};
-    use secret_manager_controller::controller::reconciler::reconcile;
-    use secret_manager_controller::controller::reconciler::types::{Reconciler, TriggerSource};
-    use secret_manager_controller::crd::SecretManagerConfig;
     use std::sync::Arc;
 
     /// Initialize test environment
@@ -110,10 +110,12 @@ mod tests {
                 .expect("Failed to create Reconciler"),
         );
 
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(created_config.clone()),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
         assert!(result.is_ok(), "First reconciliation should succeed");
@@ -150,10 +152,12 @@ mod tests {
             .await
             .expect("Failed to get SecretManagerConfig");
 
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(updated_config),
             reconciler,
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
         assert!(result.is_ok(), "Second reconciliation should succeed");
@@ -243,7 +247,14 @@ mod tests {
                 .expect("Failed to create Reconciler"),
         );
 
-        let result = reconcile(Arc::new(config), reconciler, TriggerSource::ManualCli).await;
+        let controller_config = create_test_controller_config();
+        let result = reconcile(
+            Arc::new(config),
+            reconciler,
+            TriggerSource::ManualCli,
+            controller_config,
+        )
+        .await;
         assert!(result.is_ok(), "Reconciliation should succeed");
 
         // TODO: Verify that no diff detection occurred (check metrics)
@@ -335,10 +346,12 @@ mod tests {
         );
 
         // First reconciliation - creates secret
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(created_config.clone()),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
         assert!(result.is_ok(), "First reconciliation should succeed");
@@ -366,10 +379,12 @@ mod tests {
             .expect("Failed to get SecretManagerConfig");
 
         // Second reconciliation - should update secret (triggerUpdate enabled)
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(updated_config),
             reconciler,
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
         assert!(result.is_ok(), "Second reconciliation should succeed");
@@ -459,10 +474,12 @@ mod tests {
         );
 
         // First reconciliation - creates secret (triggerUpdate only affects updates, not creation)
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(created_config.clone()),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
         assert!(result.is_ok(), "First reconciliation should succeed");
@@ -490,10 +507,12 @@ mod tests {
             .expect("Failed to get SecretManagerConfig");
 
         // Second reconciliation - should NOT update secret (triggerUpdate disabled)
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(updated_config),
             reconciler,
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
         assert!(result.is_ok(), "Second reconciliation should succeed");
@@ -583,10 +602,12 @@ mod tests {
         );
 
         // Reconciliation - should create missing secret even when triggerUpdate is disabled
+        let controller_config = create_test_controller_config();
         let result = reconcile(
             Arc::new(created_config),
             reconciler,
             TriggerSource::ManualCli,
+            controller_config,
         )
         .await;
         assert!(result.is_ok(), "Reconciliation should succeed");

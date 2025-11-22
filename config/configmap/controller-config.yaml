@@ -1,0 +1,64 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: secret-manager-controller-config
+  namespace: microscaler-system
+  labels:
+    app: secret-manager-controller
+data:
+  # Server Configuration
+  # HTTP server port for metrics and health probes
+  metrics_port: "5000"
+  # Server startup timeout (seconds) - how long to wait for server to be ready
+  server_startup_timeout_secs: "10"
+  # Server readiness poll interval (milliseconds) - how often to check if server is ready
+  server_poll_interval_ms: "50"
+  
+  # Reconciliation Behavior
+  # How long to wait before retrying a failed reconciliation (seconds)
+  reconciliation_error_requeue_secs: "60"
+  # Exponential backoff starting value (milliseconds) - initial delay before retrying
+  backoff_start_ms: "1000"
+  # Exponential backoff maximum value (milliseconds) - maximum delay between retries
+  backoff_max_ms: "30000"
+  
+  # Watch Stream Configuration
+  # How long to wait before restarting watch stream after unknown errors (seconds)
+  watch_restart_delay_secs: "5"
+  # How long to wait before restarting watch stream after it ends normally (seconds)
+  watch_restart_delay_after_end_secs: "1"
+  
+  # Validation Minimums
+  # Minimum GitRepository pull interval (seconds) - enforced to prevent API rate limiting
+  min_gitrepository_pull_interval_secs: "60"
+  # Minimum reconcile interval (seconds) - enforced to prevent API rate limiting
+  min_reconcile_interval_secs: "60"
+  
+  # SOPS Configuration
+  # Name of the Kubernetes secret containing the SOPS GPG private key
+  sops_private_key_secret_name: "sops-private-key"
+  # Enable SOPS key watch for hot-reload (true/false)
+  sops_key_watch_enabled: "true"
+  
+  # Global Logging Configuration
+  # Global log level (ERROR, WARN, INFO, DEBUG, TRACE) - separate from per-resource CRD logging
+  log_level: "INFO"
+  # Log format (json, text)
+  log_format: "json"
+  # Enable color in text format logs (true/false)
+  log_enable_color: "false"
+  
+  # Feature Flags
+  # Enable metrics collection (true/false)
+  enable_metrics: "true"
+  # Enable distributed tracing (true/false)
+  enable_tracing: "true"
+  
+  # Resource Limits
+  # Maximum concurrent reconciliations - limits how many resources can be reconciled simultaneously
+  max_concurrent_reconciliations: "10"
+  # Maximum secrets per resource - prevents resource exhaustion from overly large secret lists
+  max_secrets_per_resource: "1000"
+  # Maximum secret size in bytes - enforced by validation (64KB default)
+  max_secret_size_bytes: "65536"
+

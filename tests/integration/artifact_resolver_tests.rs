@@ -9,11 +9,11 @@
 //! - FluxCD artifact path resolution
 //! - ArgoCD artifact path resolution
 
-use secret_manager_controller::controller::reconciler::artifact::{
+use controller::controller::reconciler::artifact::{
     get_argocd_artifact_path, get_flux_artifact_path, get_flux_git_repository,
 };
-use secret_manager_controller::controller::reconciler::types::Reconciler;
-use secret_manager_controller::SourceRef;
+use controller::controller::reconciler::types::Reconciler;
+use controller::SourceRef;
 use kube::Client;
 use std::collections::HashMap;
 
@@ -37,7 +37,8 @@ async fn test_get_flux_git_repository_missing() {
     let source_ref = SourceRef {
         kind: "GitRepository".to_string(),
         name: "non-existent-repo".to_string(),
-        namespace: Some("default".to_string()),
+        namespace: "default".to_string(),
+        git_credentials: None,
     };
 
     let result = get_flux_git_repository(&reconciler, &source_ref).await;
@@ -63,7 +64,8 @@ async fn test_get_flux_git_repository_no_artifact() {
     let source_ref = SourceRef {
         kind: "GitRepository".to_string(),
         name: "repo-without-artifact".to_string(),
-        namespace: Some("default".to_string()),
+        namespace: "default".to_string(),
+        git_credentials: None,
     };
 
     let result = get_flux_git_repository(&reconciler, &source_ref).await;
@@ -110,7 +112,8 @@ async fn test_get_argocd_artifact_path_missing_application() {
     let source_ref = SourceRef {
         kind: "Application".to_string(),
         name: "non-existent-app".to_string(),
-        namespace: Some("default".to_string()),
+        namespace: "default".to_string(),
+        git_credentials: None,
     };
 
     let result = get_argocd_artifact_path(&reconciler, &source_ref).await;
@@ -136,7 +139,8 @@ async fn test_get_argocd_artifact_path_no_repo() {
     let source_ref = SourceRef {
         kind: "Application".to_string(),
         name: "app-without-repo".to_string(),
-        namespace: Some("default".to_string()),
+        namespace: "default".to_string(),
+        git_credentials: None,
     };
 
     let result = get_argocd_artifact_path(&reconciler, &source_ref).await;
@@ -158,29 +162,31 @@ fn test_source_ref_validation() {
     let valid_source_ref = SourceRef {
         kind: "GitRepository".to_string(),
         name: "test-repo".to_string(),
-        namespace: Some("default".to_string()),
+        namespace: "default".to_string(),
+        git_credentials: None,
     };
 
     assert_eq!(valid_source_ref.kind, "GitRepository");
     assert_eq!(valid_source_ref.name, "test-repo");
-    assert_eq!(valid_source_ref.namespace, Some("default".to_string()));
+    assert_eq!(valid_source_ref.namespace, "default");
 
     // Test ArgoCD Application
     let argocd_source_ref = SourceRef {
         kind: "Application".to_string(),
         name: "test-app".to_string(),
-        namespace: Some("argocd".to_string()),
+        namespace: "argocd".to_string(),
+        git_credentials: None,
     };
 
     assert_eq!(argocd_source_ref.kind, "Application");
     assert_eq!(argocd_source_ref.name, "test-app");
-    assert_eq!(argocd_source_ref.namespace, Some("argocd".to_string()));
+    assert_eq!(argocd_source_ref.namespace, "argocd");
 }
 
 #[test]
 fn test_artifact_path_sanitization() {
     // Test that artifact paths are properly sanitized
-    use secret_manager_controller::controller::reconciler::utils::sanitize_path_component;
+    use controller::controller::reconciler::utils::sanitize_path_component;
 
     // Test normal names
     assert_eq!(sanitize_path_component("my-repo"), "my-repo");

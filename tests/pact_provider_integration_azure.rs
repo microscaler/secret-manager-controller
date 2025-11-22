@@ -14,10 +14,10 @@
 mod common;
 
 use common::init_rustls;
+use controller::provider::azure::key_vault::AzureKeyVault;
+use controller::provider::SecretManagerProvider;
+use controller::AzureConfig;
 use pact_consumer::prelude::*;
-use secret_manager_controller::provider::azure::key_vault::AzureKeyVault;
-use secret_manager_controller::provider::SecretManagerProvider;
-use secret_manager_controller::AzureConfig;
 use serde_json::json;
 use std::env;
 use std::sync::Once;

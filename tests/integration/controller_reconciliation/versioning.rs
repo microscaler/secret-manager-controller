@@ -9,10 +9,10 @@
 #[cfg(test)]
 mod tests {
     use super::super::common::*;
+    use controller::controller::reconciler::reconcile;
+    use controller::controller::reconciler::types::{Reconciler, TriggerSource};
+    use controller::crd::SecretManagerConfig;
     use kube::api::{Api, PostParams};
-    use secret_manager_controller::controller::reconciler::reconcile;
-    use secret_manager_controller::controller::reconciler::types::{Reconciler, TriggerSource};
-    use secret_manager_controller::crd::SecretManagerConfig;
     use std::sync::Arc;
     use tracing::info;
 
@@ -103,6 +103,7 @@ mod tests {
             Arc::new(created_config.clone()),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            create_test_controller_config(),
         )
         .await;
 
@@ -127,6 +128,7 @@ mod tests {
             Arc::new(created_config),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            create_test_controller_config(),
         )
         .await;
 
@@ -227,6 +229,7 @@ mod tests {
             Arc::new(created_config.clone()),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            create_test_controller_config(),
         )
         .await;
 
@@ -235,6 +238,7 @@ mod tests {
             Arc::new(created_config),
             reconciler.clone(),
             TriggerSource::ManualCli,
+            create_test_controller_config(),
         )
         .await;
 
@@ -353,6 +357,7 @@ mod tests {
                 Arc::new(created_config.clone()),
                 reconciler.clone(),
                 TriggerSource::ManualCli,
+                create_test_controller_config(),
             )
             .await;
 
@@ -472,6 +477,7 @@ mod tests {
                 Arc::new(created_config.clone()),
                 reconciler.clone(),
                 TriggerSource::ManualCli,
+                create_test_controller_config(),
             )
             .await;
 
