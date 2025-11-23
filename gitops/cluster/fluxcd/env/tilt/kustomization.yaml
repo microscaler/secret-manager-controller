@@ -1,0 +1,15 @@
+---
+# Kustomization for Tilt Development Environment (FluxCD)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - gitrepository.yaml
+  - secretmanagerconfig-gcp.yaml  # GCP
+  - secretmanagerconfig-aws.yaml  # AWS
+  - secretmanagerconfig-azure.yaml  # Azure
+
+# All resources are in the tilt namespace:
+# - Namespace: tilt (defined in namespaces/namespace.yaml at top level)
+# - GitRepository: tilt (defined in gitrepository.yaml) - FluxCD source
+# - SecretManagerConfig: tilt (defined in secretmanagerconfig.yaml) - references GitRepository

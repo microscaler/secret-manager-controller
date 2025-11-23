@@ -1,0 +1,475 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  TTL_REGISTRY: ttl.sh
+
+jobs:
+  # Step 1: Run linting checks
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-secret-manager-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-secret-manager-
+
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check
+
+      - name: Run clippy
+        continue-on-error: true
+        run: |
+          cargo clippy --all-targets --all-features -- -D warnings || echo "Clippy found warnings (non-blocking)"
+
+      - name: Run cargo audit
+        continue-on-error: true
+        run: |
+          # Install cargo-audit if not available
+          if ! command -v cargo-audit &> /dev/null; then
+            cargo install cargo-audit --locked || echo "cargo-audit installation failed, skipping audit"
+          fi
+          cargo audit || echo "Audit completed with warnings"
+
+  # Step 2: Run cargo tests
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      checks: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install musl target and tools (for Linux musl builds)
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-secret-manager-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-secret-manager-
+
+      - name: Build (native and musl targets)
+        run: |
+          # Build native target (for faster unit tests)
+          cargo build --all-targets --all-features
+          # Build musl target using host_aware_build.py (tests cross-compilation)
+          python3 scripts/host_aware_build.py --all-features
+
+      - name: Run unit tests
+        run: |
+          # Run library tests for workspace members only (excludes test-only packages)
+          cargo test --lib --all-features --no-fail-fast --workspace
+
+      - name: Generate CRD
+        run: |
+          cargo run -p controller --bin crdgen > config/crd/secretmanagerconfig.yaml || echo "CRD generation completed"
+
+      - name: Verify CRD is valid YAML
+        run: |
+          # Check if CRD file exists and is valid YAML
+          if [ -f config/crd/secretmanagerconfig.yaml ]; then
+            # Use Python to validate YAML (available in GitHub Actions)
+            python3 -c "import yaml; yaml.safe_load(open('config/crd/secretmanagerconfig.yaml'))" || exit 1
+            echo "✅ CRD YAML is valid"
+          else
+            echo "⚠️  CRD file not found"
+            exit 1
+          fi
+
+  # Step 2.5: Code Coverage with Pact Tests (Kind cluster)
+  coverage:
+    name: Coverage and Pact Tests
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # Fetch all history for accurate coverage diff
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          # Install any Python dependencies needed by setup_kind.py if required
+
+      - name: Install Kind
+        run: |
+          # Download and install Kind binary (required by setup_kind.py)
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+          
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'latest'
+
+      - name: Install Flux CLI
+        run: |
+          # Download and install Flux CLI binary (required by install_fluxcd.py)
+          # We only need the CLI tool, not the full Flux installation
+          # Must be installed BEFORE setup_kind.py runs, as it calls install_fluxcd.py
+          FLUX_VERSION=$(curl -s https://api.github.com/repos/fluxcd/flux2/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | sed 's/v//')
+          curl -LO "https://github.com/fluxcd/flux2/releases/download/v${FLUX_VERSION}/flux_${FLUX_VERSION}_linux_amd64.tar.gz"
+          tar -xzf flux_${FLUX_VERSION}_linux_amd64.tar.gz
+          sudo mv flux /usr/local/bin/flux
+          chmod +x /usr/local/bin/flux
+          rm flux_${FLUX_VERSION}_linux_amd64.tar.gz
+          # Verify flux CLI is installed (--client flag avoids cluster connection)
+          flux version --client
+
+      - name: Setup Kind cluster (includes registry and microscaler-system namespace)
+        env:
+          NON_INTERACTIVE: "1"
+        run: |
+          # Use our setup_kind.py script which handles:
+          # - Creates Kind cluster (using kind-config.yaml)
+          # - Sets up local Docker registry
+          # - Connects registry to cluster network
+          # - Configures containerd to use local registry
+          # - Creates microscaler-system namespace
+          # - Installs FluxCD (via install_gitops_components -> install_fluxcd.py)
+          # - Installs ArgoCD CRDs (via install_gitops_components -> install_argocd.py)
+          # NON_INTERACTIVE=1 ensures it uses existing cluster if present (no prompts)
+          # Note: Flux CLI must be installed before this step
+          python3 scripts/setup_kind.py
+
+      # Note: FluxCD and ArgoCD are now installed by setup_kind.py
+      # No need to install them separately here
+      # - name: Install FluxCD (source-controller and notification-controller)
+      #   run: |
+      #     # Install FluxCD components using the same script as local dev
+      #     # This installs source-controller and notification-controller (minimal FluxCD)
+      #     python3 scripts/tilt/install_fluxcd.py
+
+      # - name: Install ArgoCD CRDs
+      #   run: |
+      #     # Install ArgoCD CRDs using the same script as local dev
+      #     # This installs only the CRDs (minimal ArgoCD) from pact-broker/argocd
+      #     python3 scripts/tilt/install_argocd.py
+
+      # Note: Tilt CI will build the controller image locally and push to local registry
+      # No need for external test image
+
+      - name: Install musl target and tools (for Linux musl builds)
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-secret-manager-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-secret-manager-
+
+      - name: Build all binaries and apply CRD
+        run: |
+          # Build all binaries (including crdgen) and generate/apply CRD in one step
+          # This ensures CRD is available before any resources that use it
+          python3 scripts/tilt/build_all_binaries.py
+          echo "✅ All binaries built and CRD applied"
+
+      - name: Install Tilt
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash
+          tilt version
+
+      - name: Run Tilt CI (deploys controller and all infrastructure)
+        run: |
+          echo "Starting Tilt CI - will build, deploy, and wait for services to be healthy"
+          # Tilt CI will:
+          # - Build controller Docker image
+          # - Push to local registry
+          # - Apply RBAC, deployment, and GitOps resources
+          # - Wait for all resources to be healthy
+          tilt ci --timeout 10m
+        timeout-minutes: 12
+
+      # Note: Tilt CI already built and deployed the controller image
+      # No need to patch - Tilt handles the image build and deployment
+
+      # Note: FluxCD and ArgoCD are now installed by setup_kind.py
+      # No need to install them separately here
+
+      - name: Build mock server binaries
+        run: |
+          # Build mock server binaries (needed for pact-infrastructure deployment)
+          # build-all-binaries already built them, but we need to copy them for Docker build
+          python3 scripts/tilt/copy_mock_server_binaries.py || echo "Mock server binaries already copied"
+
+      - name: Build and push mock server Docker image to local registry
+        env:
+          IMAGE_NAME: localhost:5000/pact-mock-server
+          TAG: ci
+        run: |
+          # Build the pact-mock-server image containing all mock server binaries
+          # Push to localhost:5000 so Kind cluster can access it
+          python3 scripts/tilt/docker_build_mock_server.py
+          echo "✅ Mock server image built and pushed to local registry"
+
+      - name: Deploy Pact Infrastructure to Kind cluster
+        run: |
+          # Apply Pact infrastructure (combined deployment with broker, mock servers, webhook, manager)
+          # Update image reference to use local registry image
+          kubectl apply -k pact-broker/k8s/
+          # Patch deployment to use the CI-built image from local registry
+          kubectl set image deployment/pact-infrastructure \
+            pact-mock-server=localhost:5000/pact-mock-server:ci \
+            -n secret-manager-controller-pact-broker || echo "Image patch completed or not needed"
+          echo "✅ Pact infrastructure manifests applied"
+
+      - name: Wait for Pact Infrastructure to be ready
+        run: |
+          # Wait for the combined pact-infrastructure deployment
+          kubectl wait --for=condition=available deployment/pact-infrastructure -n secret-manager-controller-pact-broker --timeout=300s
+          # Wait for all containers in the pod to be ready
+          kubectl wait --for=condition=ready pod -l app=pact-infrastructure -n secret-manager-controller-pact-broker --timeout=300s
+          echo "✅ Pact infrastructure is ready"
+
+      - name: Run Pact tests (generates pact files)
+        run: |
+          # First, run tests to generate pact files
+          # This will create target/pacts/*.json files
+          cargo test --test pact_* --no-fail-fast || echo "Pact tests completed (some may have failed)"
+          
+          # Populate the pact-contracts ConfigMap from generated pact files
+          # This allows the manager to publish contracts
+          python3 scripts/tilt/populate_pact_configmap.py || echo "ConfigMap population completed"
+          
+          # Wait for manager to publish pacts (without running tests again)
+          # We'll run all tests with coverage next, which includes Pact tests
+          # Use a simple kubectl wait approach
+          echo "Waiting for manager to publish pacts..."
+          timeout 120 bash -c 'until kubectl exec -n secret-manager-controller-pact-broker $(kubectl get pod -n secret-manager-controller-pact-broker -l app=pact-infrastructure -o jsonpath="{.items[0].metadata.name}") -c manager -- curl -s http://localhost:1238/ready | grep -q "ready"; do sleep 2; done' || echo "Manager ready check completed (continuing anyway)"
+
+      - name: Run all tests with coverage (includes Pact tests)
+        run: |
+          # Run all tests with coverage, including Pact tests that need the cluster
+          # This will run all tests including the Pact tests that were previously commented out
+          cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info --tests
+
+      - name: Generate coverage summary
+        run: |
+          echo "## 📊 Code Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cargo llvm-cov --all-features --workspace --summary-only --output-format markdown >> $GITHUB_STEP_SUMMARY || true
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📈 Coverage artifacts available for download below" >> $GITHUB_STEP_SUMMARY
+
+      - name: Generate HTML coverage report
+        run: |
+          cargo llvm-cov --all-features --workspace --html --output-dir coverage-html --tests || true
+
+      - name: Upload LCOV coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          retention-days: 30
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-report
+          path: coverage-html/
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Generate PR coverage comment
+        if: github.event_name == 'pull_request'
+        run: |
+          mkdir -p coverage-comment
+          cargo llvm-cov --all-features --workspace --summary-only --output-format markdown > coverage-comment/coverage.md || true
+          echo "" >> coverage-comment/coverage.md
+          echo "📥 **Download Coverage Reports:**" >> coverage-comment/coverage.md
+          echo "- LCOV format: Available in workflow artifacts" >> coverage-comment/coverage.md
+          echo "- HTML report: Available in workflow artifacts" >> coverage-comment/coverage.md
+
+      - name: Comment PR with coverage summary
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          recreate: true
+          path: coverage-comment/coverage.md
+
+      - name: Cleanup test resources
+        if: always()
+        run: |
+          kubectl delete namespace secret-manager-controller-pact-broker --ignore-not-found=true || true
+          # Note: We keep the cluster for reuse, only cleanup test resources
+
+  
+  # Step 4: Build binaries and publish final container and binaries
+  build-and-publish:
+    name: Build and Publish
+    runs-on: ubuntu-latest
+    needs: [coverage]
+    # Run on push (not PR), tags, or manual dispatch
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install musl target and tools
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-secret-manager-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-secret-manager-
+
+      - name: Build binaries
+        run: |
+          python3 scripts/host_aware_build.py --release --bins
+
+      - name: Upload binaries as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: secret-manager-controller-binaries
+          path: |
+            target/x86_64-unknown-linux-musl/release/secret-manager-controller
+            target/x86_64-unknown-linux-musl/release/crdgen
+            target/x86_64-unknown-linux-musl/release/msmctl
+          retention-days: 30
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

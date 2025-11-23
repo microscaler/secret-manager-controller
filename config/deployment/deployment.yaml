@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: secret-manager-controller
-  namespace: flux-system
+  namespace: microscaler-system
 spec:
   replicas: 1
   selector:
@@ -16,35 +16,71 @@ spec:
       serviceAccountName: secret-manager-controller
       containers:
       - name: controller
-        image: localhost:5001/pricewhisperer-secret-manager-controller:tilt
-        imagePullPolicy: Never
+        image: localhost:5000/secret-manager-controller
+        imagePullPolicy: IfNotPresent
+        envFrom:
+        # Controller-level configuration from ConfigMap
+        # Environment variables are populated from the ConfigMap using envFrom
+        # The ConfigMap name is configurable via SecretManagerConfig.spec.hotReload.configMapName
+        # Default: "secret-manager-controller-config"
+        # If the ConfigMap doesn't exist, controller uses sensible defaults
+        - configMapRef:
+            name: secret-manager-controller-config
+            optional: true
         env:
         - name: RUST_LOG
           value: "info"
-        - name: GOOGLE_APPLICATION_CREDENTIALS
-          value: /var/secrets/google/key.json
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        # METRICS_PORT can be overridden via ConfigMap
+        # If not in ConfigMap, defaults to 5000
         - name: METRICS_PORT
-          value: "8080"
+          value: "5000"
+        # Datadog OpenTelemetry configuration (optional)
+        # Only initialize Datadog tracing if DD_API_KEY is present
+        # These environment variables are read from Kubernetes secrets or ConfigMaps
+        - name: DD_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: datadog-credentials
+              key: api-key
+              optional: true
+        - name: DD_SITE
+          valueFrom:
+            configMapKeyRef:
+              name: datadog-config
+              key: site
+              optional: true
+        - name: DD_SERVICE
+          valueFrom:
+            configMapKeyRef:
+              name: datadog-config
+              key: service
+              optional: true
+        - name: DD_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: datadog-config
+              key: env
+              optional: true
         ports:
         - name: metrics
-          containerPort: 8080
+          containerPort: 5000
           protocol: TCP
         livenessProbe:
           httpGet:
             path: /healthz
             port: metrics
           initialDelaySeconds: 10
-          periodSeconds: 10
+          periodSeconds: 15
         readinessProbe:
           httpGet:
             path: /readyz
             port: metrics
-          initialDelaySeconds: 5
-          periodSeconds: 5
-        volumeMounts:
-        - name: gcp-credentials
-          mountPath: /var/secrets/google
-          readOnly: true
+          initialDelaySeconds: 10
+          periodSeconds: 15
         resources:
           requests:
             cpu: 100m
@@ -52,8 +88,11 @@ spec:
           limits:
             cpu: 500m
             memory: 512Mi
+        volumeMounts:
+        - name: app-storage
+          mountPath: /tmp/smc
       volumes:
-      - name: gcp-credentials
-        secret:
-          secretName: gcp-secret-manager-credentials
+      - name: app-storage
+        persistentVolumeClaim:
+          claimName: secret-manager-controller-cache
 

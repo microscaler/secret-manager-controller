@@ -1,0 +1,16 @@
+---
+# Kustomization for Tilt Development Environment (ArgoCD)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - application.yaml
+  - secretmanagerconfig-gcp.yaml  # GCP
+  - secretmanagerconfig-aws.yaml  # AWS
+  - secretmanagerconfig-azure.yaml  # Azure
+
+# All resources are in the prod namespace:
+# - Namespace: prod (defined in namespaces/namespace.yaml at top level)
+# - Application: prod (defined in application.yaml) - ArgoCD source
+# - SecretManagerConfig: prod (defined in secretmanagerconfig.yaml) - references Application
+

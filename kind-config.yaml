@@ -1,0 +1,22 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: secret-manager-controller
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+# Note: Registry mirror configuration is handled dynamically by scripts/setup_kind.py
+# which uses the registry IP address for reliable connectivity
+networking:
+  # Use unique pod and service subnets to avoid conflicts with other Kind clusters
+  # Allocation: secret-manager-controller cluster (2nd in sequence)
+  # - Pod Subnet: 10.202.0.0/16 (unique, avoids default 10.244.0.0/16 and brrtrouter-dev)
+  # - Service Subnet: 10.203.0.0/16 (unique, avoids default 10.96.0.0/12 and brrtrouter-dev)
+  # See docs/KIND_SUBNET_ALLOCATION.md for allocation strategy
+  podSubnet: "10.202.0.0/16"
+  serviceSubnet: "10.203.0.0/16"
+

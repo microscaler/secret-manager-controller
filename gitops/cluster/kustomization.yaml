@@ -1,0 +1,22 @@
+---
+# Top-level Kustomization for Secret Manager Controller GitOps
+# Single entry point for all ArgoCD and FluxCD environments
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespaces - consolidated in namespaces/ directory
+resources:
+  - namespaces/namespace.yaml
+
+# ArgoCD Environments
+  - argocd/env/tilt
+  - argocd/env/dev
+  - argocd/env/stage
+  - argocd/env/prod
+
+# FluxCD Environments
+  - fluxcd/env/tilt
+  - fluxcd/env/dev
+  - fluxcd/env/stage
+  - fluxcd/env/prod
+

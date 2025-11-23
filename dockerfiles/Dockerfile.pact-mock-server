@@ -1,0 +1,45 @@
+# Dockerfile for Axum Pact Mock Server (Rust/Axum)
+# Uses shared base image with all common setup
+# Binaries are cross-compiled on host and copied in (matches controller pattern)
+
+FROM docker.io/microscaler/pact-mock-server-base-image:latest
+
+# Base image already has:
+# - Non-root user (pact)
+# - /app directory with proper permissions
+# - Environment variables (RUST_BACKTRACE, RUST_LOG)
+# - Exposed ports (1234, 1235, 1236, 1237)
+# - pact-broker CLI (Ruby gem) for manager sidecar
+
+# WORKDIR is already set to /app in base image
+
+# Switch to root to copy and set permissions
+USER root
+
+# Copy pre-built binaries from build_artifacts (x86_64 Linux musl target)
+# Note: Binaries must exist before Docker build (ensured by Tilt resource_deps)
+# Build context is root, so paths are relative to that
+# Single COPY command to reduce layers
+COPY ./build_artifacts/mock-server/gcp-mock-server \
+     ./build_artifacts/mock-server/aws-mock-server \
+     ./build_artifacts/mock-server/azure-mock-server \
+     ./build_artifacts/mock-server/webhook \
+     ./build_artifacts/mock-server/manager \
+     /app/
+
+# Verify files exist, set permissions and ownership (fail fast if files are missing)
+RUN test -f /app/gcp-mock-server && \
+    test -f /app/aws-mock-server && \
+    test -f /app/azure-mock-server && \
+    test -f /app/webhook && \
+    test -f /app/manager && \
+    chmod +x /app/gcp-mock-server /app/aws-mock-server /app/azure-mock-server /app/webhook /app/manager && \
+    chown -R pact:pact /app
+
+# Switch back to non-root user
+USER pact
+
+# Default command (can be overridden in deployment)
+# Each deployment will specify which binary to run
+CMD ["/app/gcp-mock-server"]
+

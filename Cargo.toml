@@ -1,71 +1,98 @@
-[package]
-name = "secret-manager-controller"
+[workspace]
+members = [
+    "crates/controller",
+    "crates/pact-mock-server",
+    "crates/paths",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 authors = ["Microscaler <info@microscaler.io>"]
-description = "Kubernetes controller that syncs secrets from GitOps repositories (FluxCD/ArgoCD) to Google Cloud Secret Manager"
 license = "BSL-1.1"
-repository = "https://github.com/microscaler/PriceWhisperer"
-homepage = "https://github.com/microscaler/PriceWhisperer/tree/main/hack/controllers/secret-manager-controller"
-documentation = "https://docs.rs/secret-manager-controller"
-keywords = ["kubernetes", "controller", "secrets", "gitops", "fluxcd", "argocd", "gcp", "secret-manager", "sops"]
-categories = ["development-tools", "web-programming", "authentication"]
-readme = "README.md"
 
-[[bin]]
-name = "secret-manager-controller"
-path = "src/main.rs"
+# Workspace-level lint configuration
+# Individual crates can override these if needed
+[workspace.lints.rust]
+ambiguous_negative_literals = "warn"
+missing_debug_implementations = "warn"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+trivial_numeric_casts = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
 
-[[bin]]
-name = "crdgen"
-path = "src/crdgen.rs"
+[workspace.lints.clippy]
+cargo = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+allow_attributes_without_reason = "warn"
+as_pointer_underscore = "warn"
+assertions_on_result_states = "warn"
+clone_on_ref_ptr = "warn"
+deref_by_slicing = "warn"
+disallowed_script_idents = "warn"
+empty_drop = "warn"
+empty_enum_variants_with_brackets = "warn"
+empty_structs_with_brackets = "warn"
+fn_to_numeric_cast_any = "warn"
+if_then_some_else_none = "warn"
+map_err_ignore = "warn"
+redundant_type_annotations = "warn"
+renamed_function_params = "warn"
+semicolon_outside_block = "warn"
+string_to_string = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unneeded_field_pattern = "warn"
+unused_result_ok = "warn"
+literal_string_with_formatting_args = "allow"
 
-[dependencies]
-# Kubernetes client
-kube = { version = "0.88", features = ["runtime", "derive"] }
-kube-runtime = "0.88"
-k8s-openapi = { version = "0.21", default-features = false, features = ["v1_28"] }
+# Root package for tests
+# Tests at root level need to be part of a package in a workspace
+[package]
+name = "secret-manager-controller-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Integration and contract tests for secret-manager-controller"
+repository = "https://github.com/microscaler/secret-manager-controller"
+keywords = ["kubernetes", "testing", "integration-tests", "pact"]
+categories = ["development-tools", "testing"]
+
+[dev-dependencies]
+# Test dependencies on workspace members
+controller = { path = "crates/controller" }
+pact-mock-server = { path = "crates/pact-mock-server" }
+paths = { path = "crates/paths" }
+
+# Common test dependencies (used by integration and unit tests)
+serde_json = "1.0"
+serde_yaml = "0.9.33"
+kube = { version = "2.0.0", features = ["runtime", "derive", "client", "rustls-tls"], default-features = false }
+kube-runtime = "2.0"
+rustls = { version = "0.23", features = ["ring"], default-features = false }
+base64 = "0.22"
+anyhow = "1.0"
+tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+md5 = "0.8.0"
 tokio = { version = "1", features = ["full"] }
 
-# GCP Secret Manager - using official Google Cloud Rust SDK
-# Note: cargo zigbuild handles OpenSSL cross-compilation automatically
-google-cloud-secretmanager-v1 = "1.1"
-google-cloud-auth = "1.1"
+# Pact contract testing
+pact_consumer = "1.4"
+# HTTP client for Pact tests (to make requests to mock server)
+# Force rustls to avoid OpenSSL dependency
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls", "rustls-tls-webpki-roots"] }
 
-# SOPS decryption
-rops = "0.1"
-
-# File parsing
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_yaml = "0.9"
-dotenv = "0.15"
-schemars = "0.8"
-base64 = "0.21"
-
-# Error handling
-anyhow = "1.0"
-thiserror = "1.0"
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# File system operations
-walkdir = "2.4"
-regex = "1.10"
-
-# Async runtime
-futures = "0.3"
-
-# Time handling
-chrono = { version = "0.4", features = ["serde"] }
-
-# HTTP server for metrics and probes
-axum = "0.7"
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
-
-# Prometheus metrics
-prometheus = "0.13"
-
+[lints]
+workspace = true

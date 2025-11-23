@@ -1,0 +1,47 @@
+---
+# Consolidated Namespace Definitions
+# All namespaces for ArgoCD and FluxCD environments
+# Note: microscaler-system namespace is created by Kind cluster setup (scripts/setup_kind.py)
+# and is not managed by GitOps to ensure it's always available
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tilt
+  labels:
+    environment: tilt
+    managed-by: gitops
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev
+  labels:
+    environment: dev
+    managed-by: gitops
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: stage
+  labels:
+    environment: stage
+    managed-by: gitops
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod
+  labels:
+    environment: prod
+    managed-by: gitops
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: secret-manager-controller-pact-broker
+  labels:
+    name: secret-manager-controller-pact-broker
+    app.kubernetes.io/component: pact-broker
+    app.kubernetes.io/part-of: secret-manager-controller
+    managed-by: gitops

@@ -1,0 +1,19 @@
+---
+
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: gitrepository-tilt
+  namespace: tilt
+spec:
+  url: https://github.com/microscaler/secret-manager-controller.git
+  ref:
+    branch: main
+  interval: 1m
+  timeout: 20s
+  ignore: |
+    /*
+    !/deployment-configuration/profiles/tilt/**
+    !/.sops.yaml
+  secretRef:
+    name: git-credentials

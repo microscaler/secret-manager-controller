@@ -1,6 +1,12 @@
 # Secret Manager Controller Examples
 
-This directory contains example `SecretManagerConfig` resources for configuring the Secret Manager Controller to sync secrets from Flux GitRepositories to Google Cloud Secret Manager.
+This directory contains example `SecretManagerConfig` resources for configuring the Secret Manager Controller to sync secrets from Flux GitRepositories to cloud secret managers (GCP Secret Manager, AWS Secrets Manager, Azure Key Vault).
+
+## Main Examples
+
+**For the standard setup, see:**
+- `../gitops/cluster/env/` - Complete GitOps setup with GitRepository and SecretManagerConfig for each environment
+- `../deployment-configuration/` - Example deployment configuration structure with SOPS-encrypted secrets
 
 ## Project Structure Support
 
@@ -21,7 +27,7 @@ microservices/
           └── application.secrets.env
 ```
 
-**Example:** See `idam-dev-secret-manager-config.yaml` and `idam-prd-secret-manager-config.yaml`
+**Examples:** See `idam-dev-secret-manager-config.yaml` and `idam-prd-secret-manager-config.yaml`
 
 ### 2. Single Service Structure
 
@@ -42,65 +48,27 @@ deployment-configuration/
 
 **Note:** The `profiles/` directory structure is Skaffold-compliant. See [Skaffold documentation](https://skaffold.dev/) for more information.
 
-### Backward Compatibility
+## Cloud Provider Examples
 
-The controller also supports legacy structures without the `profiles/` directory:
-- `microservices/{service}/deployment-configuration/{env}/`
-- `deployment-configuration/{env}/`
+### Google Cloud Platform (GCP)
 
-However, the `profiles/` structure is recommended for Skaffold compatibility.
+**Files:**
+- `idam-dev-secret-manager-config.yaml` - GCP with default authentication
+- `idam-dev-workload-identity-secret-manager-config.yaml` - GCP with Workload Identity
 
-## IDAM Service Examples (Monolith Structure)
+### Amazon Web Services (AWS)
 
-### Development Environment
+**File:** `idam-dev-aws-secret-manager-config.yaml`
 
-**File:** `idam-dev-secret-manager-config.yaml`
+This example syncs secrets to AWS Secrets Manager using IRSA (IAM Roles for Service Accounts).
 
-This example syncs secrets from the IDAM service's development deployment configuration:
+### Microsoft Azure
 
-```bash
-# Apply the configuration
-kubectl apply -f examples/idam-dev-secret-manager-config.yaml
+**File:** `idam-dev-azure-secret-manager-config.yaml`
 
-# Check the status
-kubectl get secretmanagerconfig idam-dev-secrets -n pricewhisperer
-
-# View detailed status
-kubectl describe secretmanagerconfig idam-dev-secrets -n pricewhisperer
-```
-
-**Expected Secrets in GCP Secret Manager:**
-- `idam-dev-supabase-anon-key`
-- `idam-dev-jwt-secret`
-- `idam-dev-supabase-service-role-key`
-- `idam-dev-properties`
-
-### Production Environment
-
-**File:** `idam-prd-secret-manager-config.yaml`
-
-This example syncs secrets from the IDAM service's production deployment configuration:
-
-```bash
-# Apply the configuration
-kubectl apply -f examples/idam-prd-secret-manager-config.yaml
-
-# Check the status
-kubectl get secretmanagerconfig idam-prd-secrets -n pricewhisperer
-
-# View detailed status
-kubectl describe secretmanagerconfig idam-prd-secrets -n pricewhisperer
-```
-
-**Expected Secrets in GCP Secret Manager:**
-- `idam-prd-supabase-anon-key`
-- `idam-prd-jwt-secret`
-- `idam-prd-supabase-service-role-key`
-- `idam-prd-properties`
+This example syncs secrets to Azure Key Vault using Workload Identity.
 
 ## Operation Modes
-
-The controller supports two operation modes:
 
 ### 1. Kustomize Build Mode (Recommended)
 
@@ -114,10 +82,6 @@ The controller supports two operation modes:
 
 **Example:** See `idam-dev-kustomize-secret-manager-config.yaml`
 
-**Requirements:**
-- `kustomize` binary must be available in controller container
-- Path must contain `kustomization.yaml` with `secretGenerator` configuration
-
 ### 2. Raw File Mode
 
 **When to use:** Simple setups without kustomize overlays/patches.
@@ -128,159 +92,57 @@ The controller supports two operation modes:
 
 **Example:** See `idam-dev-secret-manager-config.yaml`
 
-## Namespace Flexibility
-
-**Important:** The controller watches `SecretManagerConfig` resources in **all namespaces**. You can deploy your `SecretManagerConfig` resources in any namespace where your services are deployed. The controller itself runs in the `flux-system` namespace.
-
-Examples show different namespaces:
-- `pricewhisperer` - For PriceWhisperer services
-- `default` - For general services
-- Any custom namespace - Deploy where your services run
-
 ## Source Reference Examples
 
 ### FluxCD GitRepository
 
-Most examples use FluxCD GitRepository:
-
-```yaml
-sourceRef:
-  kind: GitRepository  # Default, can be omitted
-  name: pricewhisperer-manifests
-  namespace: flux-system
-```
-
-**Example:** See `idam-dev-secret-manager-config.yaml`
+Most examples use FluxCD GitRepository. For complete GitOps setup examples, see `../gitops/cluster/env/`.
 
 ### ArgoCD Application
 
 For ArgoCD users:
 
-```yaml
-sourceRef:
-  kind: Application
-  name: idam-app
-  namespace: argocd
-```
-
 **Example:** See `idam-dev-argocd-secret-manager-config.yaml`
 
 **Note:** ArgoCD support requires Git repository access. The controller extracts Git source information from the Application and attempts to access the repository. You may need to configure Git credentials or ensure the repository is accessible.
+
+## Custom Environment Names
+
+Projects using Skaffold may use custom environment names:
+- `dev-cf` - Development Cloud Foundry
+- `pp-cf` - Pre-production Cloud Foundry
+- `prod-cf` - Production Cloud Foundry
+
+**Example:** See `sam-activity-example.yaml` for a service with custom environment names.
+
+**Note:** You need separate `SecretManagerConfig` resources for each environment you want to sync.
+
+## Quick Start
+
+1. **Set up deployment configuration** (see `../deployment-configuration/README.md`)
+2. **Create GitRepository** (see `../gitops/cluster/env/` for examples)
+3. **Create SecretManagerConfig** using one of the examples in this directory
+4. **Apply to cluster:**
+   ```bash
+   kubectl apply -f examples/idam-dev-secret-manager-config.yaml
+   ```
 
 ## Prerequisites
 
 Before applying these examples, ensure:
 
 1. **Source Resource exists:**
+   - For FluxCD: Create GitRepository (see `../gitops/cluster/env/`)
+   - For ArgoCD: Ensure Application references a Git repository
 
-   **For FluxCD:**
-   ```bash
-   kubectl get gitrepository pricewhisperer-manifests -n flux-system
-   ```
-   
-   If it doesn't exist, create it:
-   ```yaml
-   apiVersion: source.toolkit.fluxcd.io/v1beta2
-   kind: GitRepository
-   metadata:
-     name: pricewhisperer-manifests
-     namespace: flux-system
-   spec:
-     url: https://github.com/microscaler/PriceWhisperer
-     interval: 5m
-     ref:
-       branch: main
-   ```
-
-   **For ArgoCD:**
-   ```bash
-   kubectl get application idam-app -n argocd
-   ```
-   
-   Ensure your ArgoCD Application references a Git repository with the deployment configuration.
-
-2. **GCP Project Configuration:**
-   - Replace `pricewhisperer-dev` and `pricewhisperer-prd` with your actual GCP project IDs
-   - Ensure Secret Manager API is enabled in both projects
-   - Ensure the controller's service account has `roles/secretmanager.admin` role
+2. **Cloud Provider Configuration:**
+   - GCP: Replace project IDs, ensure Secret Manager API is enabled
+   - AWS: Replace region, ensure Secrets Manager API is enabled
+   - Azure: Replace vault name, ensure Key Vault exists
 
 3. **SOPS Private Key:**
    - The controller needs access to the SOPS private key to decrypt `application.secrets.env` files
-   - The key should be stored in a Kubernetes secret in the `flux-system` namespace
    - See the main [README.md](../README.md) for details on SOPS key configuration
-
-## Single Service Example
-
-**File:** `single-service-secret-manager-config.yaml`
-
-This example shows how to configure the controller for a single service repository:
-
-```bash
-# Apply the configuration
-kubectl apply -f examples/single-service-secret-manager-config.yaml
-
-# Check the status
-kubectl get secretmanagerconfig my-service-secrets -n default
-```
-
-**Key Differences:**
-- `environment: dev` - **Required** - Explicitly specifies which environment/profile to sync
-- `basePath: "."` - Indicates root of repository
-- `secretPrefix: my-service` - **Required** for single service (used as service name)
-
-**Directory Structure:**
-```
-deployment-configuration/
-  profiles/
-    dev/
-      ├── application.properties
-      └── application.secrets.env
-    prd/
-      ├── application.properties
-      └── application.secrets.env
-```
-
-## Directory Structure Reference
-
-### Monolith Structure
-
-```
-microservices/
-  {service-name}/
-    deployment-configuration/
-      profiles/
-        {env}/
-          ├── application.properties      # Non-sensitive config
-          └── application.secrets.env     # SOPS-encrypted secrets
-```
-
-**Configuration:**
-- `basePath: microservices` (optional - specify if services are under a subdirectory)
-- `secretPrefix: {service-name}` (optional, defaults to service name from path)
-
-### Single Service Structure
-
-```
-deployment-configuration/
-  profiles/
-    {env}/
-      ├── application.properties      # Non-sensitive config
-      └── application.secrets.env     # SOPS-encrypted secrets
-```
-
-**Configuration:**
-- `basePath:` (optional - omit for root, or use `"."` to explicitly indicate root)
-- `secretPrefix: {service-name}` (**required** - used as service name)
-
-## Secret Naming Convention
-
-Secrets in GCP Secret Manager follow this naming pattern:
-- `{secretPrefix}-{key}` for individual secrets from `.env` files
-- `{secretPrefix}-properties` for all properties as JSON
-
-Where `secretPrefix` is either:
-- The value specified in `spec.secretPrefix`
-- Or derived from the service name in the path (e.g., `idam`)
 
 ## Verification
 
@@ -288,13 +150,10 @@ After applying a `SecretManagerConfig`, verify secrets are synced:
 
 ```bash
 # Check controller logs
-kubectl logs -n pricewhisperer -l app=secret-manager-controller --tail=50
+kubectl logs -n microscaler-system -l app=secret-manager-controller --tail=50
 
 # Check GCP Secret Manager (requires gcloud CLI)
-gcloud secrets list --project=pricewhisperer-dev --filter="name:idam-dev-*"
-
-# View a specific secret
-gcloud secrets versions access latest --secret=idam-dev-jwt-secret --project=pricewhisperer-dev
+gcloud secrets list --project=your-project --filter="name:your-prefix-*"
 ```
 
 ## Troubleshooting
@@ -305,139 +164,27 @@ If the status shows `Ready=False`, check:
 
 1. **GitRepository Status:**
    ```bash
-   kubectl get gitrepository pricewhisperer-manifests -n flux-system -o yaml
+   kubectl get gitrepository <name> -n flux-system -o yaml
    ```
    Ensure the GitRepository has an artifact in its status.
 
 2. **Controller Logs:**
    ```bash
-   kubectl logs -n pricewhisperer -l app=secret-manager-controller --tail=100
+   kubectl logs -n microscaler-system -l app=secret-manager-controller --tail=100
    ```
 
-3. **GCP Authentication:**
-   ```bash
-   # Check service account
-   kubectl get secret -n pricewhisperer -l app=secret-manager-controller
-   ```
+3. **Cloud Provider Authentication:**
+   Check service account permissions and authentication setup.
 
-### Secrets Not Appearing in GCP
+## File Reference
 
-1. Verify the controller has permissions:
-   ```bash
-   gcloud projects get-iam-policy pricewhisperer-dev \
-     --flatten="bindings[].members" \
-     --filter="bindings.members:*secret-manager-controller*"
-   ```
-
-2. Check if SOPS decryption is working:
-   ```bash
-   kubectl logs -n pricewhisperer -l app=secret-manager-controller | grep -i sops
-   ```
-
-3. Verify the file paths exist in the Git repository:
-   ```bash
-   # If you have access to the repository
-   ls -la microservices/idam/deployment-configuration/profiles/dev/
-   ```
-
-## Environment Configuration
-
-**Important:** The `environment` field is **required** and must exactly match the directory name under `profiles/`.
-
-### Standard Environment Names
-- `dev` - Development environment
-- `staging` - Staging environment
-- `prod` or `prd` - Production environment
-
-### Custom Environment Names (Skaffold)
-Projects using Skaffold may use custom environment names:
-- `dev-cf` - Development Cloud Foundry
-- `pp-cf` - Pre-production Cloud Foundry
-- `prod-cf` - Production Cloud Foundry
-- `dev-k8s` - Development Kubernetes
-- `prod-k8s` - Production Kubernetes
-
-**Example:** See `sam-activity-example.yaml` for a service with custom environment names.
-
-**Note:** You need separate `SecretManagerConfig` resources for each environment you want to sync.
-
-## Customization
-
-To create your own `SecretManagerConfig`:
-
-1. Copy one of the example files
-2. Update `metadata.name` and `metadata.namespace`
-3. Update `spec.sourceRef` to reference your source:
-   - FluxCD: `kind: GitRepository`, `name`, `namespace`
-   - ArgoCD: `kind: Application`, `name`, `namespace`
-4. Update `spec.gcpProjectId` to your GCP project ID
-5. **Set `spec.environment`** - Must match the directory name under `profiles/`:
-   - Standard: `dev`, `staging`, `prod`
-   - Custom: `dev-cf`, `pp-cf`, `prod-cf`, etc.
-6. **Optionally** set `spec.basePath` based on your structure:
-   - Monolith: `microservices`, `services`, `apps`, etc. (only if services are under a subdirectory)
-   - Single service: Omit (searches from root) or `"."` to explicitly indicate root
-   - If omitted, searches from repository root
-7. Set `spec.secretPrefix` to control secret naming:
-   - Monolith: Optional (defaults to service name from path)
-   - Single service: **Required** (used as service name)
-
-### Example: Monolith Service
-
-```yaml
-apiVersion: secret-management.microscaler.io/v1
-kind: SecretManagerConfig
-metadata:
-  name: billing-service-secrets
-  namespace: pricewhisperer
-spec:
-  sourceRef:
-    kind: GitRepository  # FluxCD GitRepository
-    name: pricewhisperer-manifests
-    namespace: flux-system
-  gcpProjectId: pricewhisperer-dev
-  environment: dev  # Required - must match directory name under profiles/
-  basePath: microservices  # Optional - only needed if services are under a subdirectory
-  secretPrefix: billing-service  # Optional
-```
-
-### Example: Single Service
-
-```yaml
-apiVersion: secret-management.microscaler.io/v1
-kind: SecretManagerConfig
-metadata:
-  name: my-service-secrets
-  namespace: default
-spec:
-  sourceRef:
-    kind: GitRepository  # FluxCD GitRepository
-    name: my-service-repo
-    namespace: flux-system
-  gcpProjectId: my-gcp-project-dev
-  environment: dev  # Required - must match directory name under profiles/
-  # basePath omitted - searches from repository root
-  secretPrefix: my-service  # Required for single service
-```
-
-### Example: Custom Environment Names (Skaffold)
-
-```yaml
-apiVersion: secret-management.microscaler.io/v1
-kind: SecretManagerConfig
-metadata:
-  name: sam-activity-dev-cf-secrets
-  namespace: default
-spec:
-  sourceRef:
-    kind: GitRepository  # FluxCD GitRepository
-    name: sam-activity-repo
-    namespace: flux-system
-  gcpProjectId: sam-activity-dev
-  environment: dev-cf  # Custom environment name - must match directory name
-  # basePath omitted - searches from repository root
-  secretPrefix: sam-activity-dev-cf
-```
-
-**Note:** For services with multiple custom environments (e.g., `dev-cf`, `pp-cf`, `prod-cf`), create separate `SecretManagerConfig` resources for each environment.
-
+- `idam-dev-secret-manager-config.yaml` - Basic GCP example (monolith structure)
+- `idam-prd-secret-manager-config.yaml` - Production GCP example
+- `idam-dev-workload-identity-secret-manager-config.yaml` - GCP with Workload Identity
+- `idam-dev-aws-secret-manager-config.yaml` - AWS Secrets Manager example
+- `idam-dev-azure-secret-manager-config.yaml` - Azure Key Vault example
+- `idam-dev-kustomize-secret-manager-config.yaml` - Kustomize build mode example
+- `idam-dev-argocd-secret-manager-config.yaml` - ArgoCD Application source example
+- `single-service-secret-manager-config.yaml` - Single service with explicit basePath
+- `single-service-no-basepath.yaml` - Single service without basePath
+- `sam-activity-example.yaml` - Custom environment names example

@@ -19,7 +19,9 @@ rules:
   verbs:
   - update
   - patch
-# Watch FluxCD GitRepository resources
+# Watch and patch FluxCD GitRepository resources
+# Patch permission is needed to suspend/resume Git pulls via suspendGitPulls field
+# Status access is needed to read artifact URLs from GitRepository status
 - apiGroups:
   - source.toolkit.fluxcd.io
   resources:
@@ -28,6 +30,13 @@ rules:
   - get
   - list
   - watch
+  - patch
+- apiGroups:
+  - source.toolkit.fluxcd.io
+  resources:
+  - gitrepositories/status
+  verbs:
+  - get
 # Watch ArgoCD Application resources
 - apiGroups:
   - argoproj.io
@@ -37,17 +46,29 @@ rules:
   - get
   - list
   - watch
-# Access SOPS private key secrets in flux-system namespace
+# Access SOPS private key secrets across all namespaces
+# The controller watches for SOPS secrets in all namespaces (tilt, dev, stage, prod, etc.)
+# to detect changes and hot-reload the key without restarting
+# Note: Kubernetes watch API requires get permission on resources being watched
+# The controller filters to specific secret names in code, so this is safe
 - apiGroups:
   - ""
   resources:
   - secrets
   verbs:
   - get
+  - list
+  - watch
+# Watch ConfigMap for controller configuration hot-reload
+# The controller watches its own ConfigMap to reload configuration without restart
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
   resourceNames:
-  - sops-private-key
-  - sops-gpg-key
-  - gpg-key
-  # Restrict to flux-system namespace for SOPS secrets
-  # Note: This requires a RoleBinding in flux-system namespace
+  - secret-manager-controller-config
 

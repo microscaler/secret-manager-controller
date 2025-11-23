@@ -1,0 +1,18 @@
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: gitrepository-dev
+  namespace: dev
+spec:
+  url: https://github.com/microscaler/secret-manager-controller.git
+  ref:
+    branch: main
+  interval: 5m
+  timeout: 20s
+  ignore: |
+    /*
+    !/deployment-configuration/profiles/dev/**
+    !/.sops.yaml
+  secretRef:
+    name: git-credentials
