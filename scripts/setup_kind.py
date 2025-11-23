@@ -414,9 +414,17 @@ def setup_kind_cluster():
     cluster_exists = CLUSTER_NAME in result.stdout
     
     if cluster_exists:
-        # Check if NON_INTERACTIVE mode is set (called from dev_up.py)
-        if os.getenv("NON_INTERACTIVE", "").lower() in ("1", "true", "yes"):
-            log_info(f"Cluster {CLUSTER_NAME} already exists, using existing cluster")
+        # Check if NON_INTERACTIVE mode is set (called from dev_up.py or CI)
+        # Also check for CI environment variables (GitHub Actions, GitLab CI, etc.)
+        is_non_interactive = (
+            os.getenv("NON_INTERACTIVE", "").lower() in ("1", "true", "yes") or
+            os.getenv("CI", "").lower() in ("1", "true", "yes") or
+            os.getenv("GITHUB_ACTIONS", "").lower() in ("1", "true", "yes") or
+            not sys.stdin.isatty()  # No TTY available (CI environments)
+        )
+        
+        if is_non_interactive:
+            log_info(f"Cluster {CLUSTER_NAME} already exists, using existing cluster (non-interactive mode)")
             # Ensure registry is connected even if cluster already exists
             ensure_registry_connected()
             # Ensure containerd is configured

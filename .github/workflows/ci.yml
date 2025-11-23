@@ -133,7 +133,6 @@ jobs:
           fi
 
   # Step 2.5: Code Coverage with Pact Tests (Kind cluster)
-  # Note: This job runs after build-test-image to use the test image
   coverage:
     name: Coverage and Pact Tests
     runs-on: ubuntu-latest
@@ -164,31 +163,35 @@ jobs:
           # Install any Python dependencies needed by setup_kind.py if required
 
       - name: Install Kind
-        uses: helm/kind-action@v1.9.0
-        with:
-          cluster_name: secret-manager-controller
-          config: kind-config.yaml
-          wait: 300s
-
+        run: |
+          # Download and install Kind binary (required by setup_kind.py)
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+          
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
         with:
           version: 'latest'
 
-      - name: Setup Kind cluster (includes FluxCD, ArgoCD CRDs, and microscaler-system namespace)
+      - name: Setup Kind cluster (includes registry, FluxCD, ArgoCD CRDs, and microscaler-system namespace)
+        env:
+          NON_INTERACTIVE: "1"
         run: |
-          # Use our setup_kind.py script which handles:
-          # - Registry setup
-          # - FluxCD source-controller installation
-          # - ArgoCD CRDs installation
-          # - microscaler-system namespace creation
+          # Use our setup_kind.py script which handles everything:
+          # - Creates Kind cluster (using kind-config.yaml)
+          # - Sets up local Docker registry
+          # - Connects registry to cluster network
+          # - Configures containerd to use local registry
+          # - Installs FluxCD source-controller
+          # - Installs ArgoCD CRDs
+          # - Creates microscaler-system namespace
+          # NON_INTERACTIVE=1 ensures it uses existing cluster if present (no prompts)
           python3 scripts/setup_kind.py
 
-      - name: Set image reference
-        id: image-ref
-        run: |
-          echo "image_ref=${{ needs.build-test-image.outputs.image-ref }}" >> $GITHUB_OUTPUT
-          echo "✅ Using test image: ${{ needs.build-test-image.outputs.image-ref }}"
+      # Note: Tilt CI will build the controller image locally and push to local registry
+      # No need for external test image
 
       - name: Install musl target and tools (for Linux musl builds)
         run: |
@@ -232,24 +235,8 @@ jobs:
           tilt ci --timeout 10m
         timeout-minutes: 12
 
-      - name: Patch controller to use test image from ttl.sh
-        run: |
-          # After Tilt CI deploys everything, patch the controller to use the test image
-          # This allows us to use the pre-built image from ttl.sh instead of building in CI
-          echo "Patching controller deployment to use test image: ${{ needs.build-test-image.outputs.image-ref }}"
-          kubectl set image deployment/secret-manager-controller \
-            controller=${{ needs.build-test-image.outputs.image-ref }} \
-            -n microscaler-system
-          
-          # Update image pull policy to allow pulling from ttl.sh
-          kubectl patch deployment secret-manager-controller \
-            -n microscaler-system \
-            -p '{"spec":{"template":{"spec":{"containers":[{"name":"controller","imagePullPolicy":"Always"}]}}}}'
-          
-          # Wait for deployment to roll out with new image
-          kubectl rollout status deployment/secret-manager-controller -n microscaler-system --timeout=300s
-          
-          echo "✅ Controller patched and ready with test image"
+      # Note: Tilt CI already built and deployed the controller image
+      # No need to patch - Tilt handles the image build and deployment
 
       # Note: FluxCD and ArgoCD are now installed by setup_kind.py
       # No need to install them separately here
