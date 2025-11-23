@@ -5,7 +5,7 @@ metadata:
   name: gitrepository-stage
   namespace: stage
 spec:
-  url: https://github.com/microscaler/gitops-cluster-stage.git
+  url: https://github.com/microscaler/secret-manager-controller.git
   ref:
     branch: main
   interval: 5m
