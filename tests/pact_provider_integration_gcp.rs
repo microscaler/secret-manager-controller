@@ -10,8 +10,12 @@
 //! These tests use the GCP REST client which works directly with Pact HTTP mock servers.
 //! When PACT_MODE=true, the REST client is automatically selected.
 //!
-//! **Note**: These tests must run sequentially to avoid environment variable conflicts.
-//! Run with: `cargo test --test pact_provider_integration_gcp -- --test-threads=1`
+//! **Note**: These tests are configured to run sequentially using a test-level mutex,
+//! ensuring proper isolation regardless of test runner configuration. The mutex ensures
+//! only one test runs at a time, preventing environment variable conflicts.
+//!
+//! Run with: `cargo test --test pact_provider_integration_gcp`
+//! (Sequential execution is enforced internally, so --test-threads=1 is optional)
 
 #[cfg(test)]
 mod common;
@@ -22,43 +26,145 @@ use controller::provider::SecretManagerProvider;
 use pact_consumer::prelude::*;
 use serde_json::json;
 use std::env;
-use std::sync::Once;
+use std::sync::{Mutex, Once};
 
 static INIT: Once = Once::new();
 
-/// Initialize test environment - set up Pact mode and rustls
+/// Global mutex to ensure tests run sequentially
+/// Each test must acquire this lock before running
+/// This ensures proper test isolation even if test runner allows parallel execution
+static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+/// Initialize test environment - set up rustls only
+/// Note: PACT_MODE is set per-test to ensure proper isolation
 fn init_test() {
     INIT.call_once(|| {
         // Initialize rustls crypto provider FIRST (before any async operations)
         init_rustls();
-
-        // Enable Pact mode
-        env::set_var("PACT_MODE", "true");
     });
 }
 
-/// Helper to set up mock server and return base URL
-/// Note: The mock_server must be kept alive for the duration of the test
-/// Returns the mock_server (which must be kept in scope) and the base_url
-fn setup_provider(
-    pact_builder: &mut PactBuilder,
-    _project_id: &str,
-) -> (
-    Box<dyn pact_consumer::mock_server::ValidatingMockServer>,
-    String,
-) {
-    let mock_server = pact_builder.start_mock_server(None, None);
-    let mut base_url = mock_server.url().to_string();
-    if base_url.ends_with('/') {
-        base_url.pop();
-    }
-    env::set_var("GCP_SECRET_MANAGER_ENDPOINT", &base_url);
-    (mock_server, base_url)
+/// Test fixture guard that ensures proper cleanup after each test
+/// This ensures test isolation by cleaning up environment variables and resetting state
+struct TestFixture {
+    endpoint: String,
 }
 
-/// Helper to clean up environment
-fn cleanup() {
-    env::remove_var("GCP_SECRET_MANAGER_ENDPOINT");
+impl TestFixture {
+    /// Set up a new test fixture with proper isolation
+    async fn setup(endpoint: String) -> Self {
+        // CRITICAL: Clean up any leftover state from previous tests FIRST
+        // This ensures we start with a completely clean state
+        // Do this multiple times to ensure it's really clean (for cargo llvm-cov)
+        Self::cleanup_all();
+        tokio::task::yield_now().await;
+        Self::cleanup_all();
+        tokio::task::yield_now().await;
+
+        // Set up the new test environment
+        env::set_var("PACT_MODE", "true");
+        env::set_var("GCP_SECRET_MANAGER_ENDPOINT", &endpoint);
+        env::set_var("__PACT_MODE_TEST__", "true");
+
+        // Small delay to ensure environment variables are visible
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
+
+        // Initialize PactModeConfig with the new endpoint
+        eprintln!("🔧 Setting up GCP test fixture with endpoint: {}", endpoint);
+        match controller::config::PactModeConfig::init() {
+            Ok(()) => {
+                eprintln!("✅ PactModeConfig initialized successfully");
+            }
+            Err(e) => {
+                eprintln!("ℹ️  PactModeConfig re-initialized: {}", e);
+            }
+        }
+
+        // Verify the setup - retry if needed (for cargo llvm-cov)
+        for _ in 0..3 {
+            let pact_config = controller::config::PactModeConfig::get();
+            if let Some(provider_config) =
+                pact_config.get_provider(&controller::config::ProviderId::GcpSecretManager)
+            {
+                if let Some(config_endpoint) = &provider_config.endpoint {
+                    if config_endpoint == &endpoint {
+                        drop(pact_config);
+                        return Self { endpoint };
+                    }
+                    eprintln!(
+                        "⚠️  Endpoint mismatch, retrying... Expected: {}, Got: {}",
+                        endpoint, config_endpoint
+                    );
+                }
+            }
+            drop(pact_config);
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        // Final verification
+        let pact_config = controller::config::PactModeConfig::get();
+        if let Some(provider_config) =
+            pact_config.get_provider(&controller::config::ProviderId::GcpSecretManager)
+        {
+            if let Some(config_endpoint) = &provider_config.endpoint {
+                assert_eq!(
+                    config_endpoint, &endpoint,
+                    "PactModeConfig endpoint mismatch. Expected: {}, Got: {}",
+                    endpoint, config_endpoint
+                );
+            }
+        }
+        drop(pact_config);
+
+        Self { endpoint }
+    }
+
+    /// Clean up all test-related environment variables and state
+    fn cleanup_all() {
+        env::remove_var("GCP_SECRET_MANAGER_ENDPOINT");
+        env::remove_var("PACT_MODE");
+        env::remove_var("__PACT_MODE_TEST__");
+
+        // Reset PactModeConfig if it exists
+        // Note: We can't fully reset OnceLock, but we can clear the config
+        // We use try-catch to safely handle the case where config doesn't exist yet
+        let _ = std::panic::catch_unwind(|| {
+            let mut config = controller::config::PactModeConfig::get();
+            config.enabled = false;
+            config.providers.clear();
+        });
+    }
+
+    /// Explicitly clean up this fixture
+    /// Call this at the end of tests to ensure cleanup happens synchronously
+    pub fn teardown(self) {
+        // Explicit cleanup - this consumes self
+        eprintln!(
+            "🧹 Tearing down GCP test fixture for endpoint: {}",
+            self.endpoint
+        );
+        Self::cleanup_all();
+    }
+}
+
+impl Drop for TestFixture {
+    fn drop(&mut self) {
+        // Clean up when the fixture goes out of scope
+        // This ensures cleanup happens even if the test panics
+        eprintln!(
+            "🧹 Cleaning up GCP test fixture for endpoint: {}",
+            self.endpoint
+        );
+        Self::cleanup_all();
+    }
+}
+
+/// Set up Pact mode environment variables using the test fixture
+/// Returns a guard that will automatically clean up when dropped
+async fn setup_pact_environment(endpoint: String) -> TestFixture {
+    TestFixture::setup(endpoint).await
 }
 
 /// Helper to base64 encode a string
@@ -69,6 +175,9 @@ fn base64_encode(s: &str) -> String {
 
 #[tokio::test]
 async fn test_gcp_provider_create_secret_with_pact() {
+    // Acquire test mutex to ensure sequential execution
+    let _guard = TEST_MUTEX.lock().expect("Test mutex poisoned");
+
     init_test();
 
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "GCP-Secret-Manager");
@@ -148,7 +257,15 @@ async fn test_gcp_provider_create_secret_with_pact() {
         i
     });
 
-    let (_mock_server, _base_url) = setup_provider(&mut pact_builder, "test-project");
+    let _mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = _mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+
+    // Set up Pact environment variables using test fixture
+    // The fixture will automatically clean up when it goes out of scope
+    let _fixture = setup_pact_environment(base_url.clone()).await;
 
     let provider = SecretManagerREST::new("test-project".to_string(), None, None)
         .await
@@ -165,11 +282,15 @@ async fn test_gcp_provider_create_secret_with_pact() {
     );
     assert_eq!(result.unwrap(), true, "Secret should have been created");
 
-    cleanup();
+    // Explicit teardown to ensure cleanup happens synchronously
+    _fixture.teardown();
 }
 
 #[tokio::test]
 async fn test_gcp_provider_update_secret_with_pact() {
+    // Acquire test mutex to ensure sequential execution
+    let _guard = TEST_MUTEX.lock().expect("Test mutex poisoned");
+
     init_test();
 
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "GCP-Secret-Manager");
@@ -225,7 +346,15 @@ async fn test_gcp_provider_update_secret_with_pact() {
         i
     });
 
-    let (_mock_server, _base_url) = setup_provider(&mut pact_builder, "test-project");
+    let _mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = _mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+
+    // Set up Pact environment variables using test fixture
+    // The fixture will automatically clean up when it goes out of scope
+    let _fixture = setup_pact_environment(base_url.clone()).await;
 
     let provider = SecretManagerREST::new("test-project".to_string(), None, None)
         .await
@@ -238,11 +367,15 @@ async fn test_gcp_provider_update_secret_with_pact() {
     assert!(result.is_ok(), "Failed to update secret: {:?}", result);
     assert_eq!(result.unwrap(), true, "Secret should have been updated");
 
-    cleanup();
+    // Explicit teardown to ensure cleanup happens synchronously
+    _fixture.teardown();
 }
 
 #[tokio::test]
 async fn test_gcp_provider_no_change_with_pact() {
+    // Acquire test mutex to ensure sequential execution
+    let _guard = TEST_MUTEX.lock().expect("Test mutex poisoned");
+
     init_test();
 
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "GCP-Secret-Manager");
@@ -269,7 +402,15 @@ async fn test_gcp_provider_no_change_with_pact() {
         i
     });
 
-    let (_mock_server, _base_url) = setup_provider(&mut pact_builder, "test-project");
+    let _mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = _mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+
+    // Set up Pact environment variables using test fixture
+    // The fixture will automatically clean up when it goes out of scope
+    let _fixture = setup_pact_environment(base_url.clone()).await;
 
     let provider = SecretManagerREST::new("test-project".to_string(), None, None)
         .await
@@ -286,11 +427,15 @@ async fn test_gcp_provider_no_change_with_pact() {
         "Secret should not have been updated (no change)"
     );
 
-    cleanup();
+    // Explicit teardown to ensure cleanup happens synchronously
+    _fixture.teardown();
 }
 
 #[tokio::test]
 async fn test_gcp_provider_get_secret_value_success() {
+    // Acquire test mutex to ensure sequential execution
+    let _guard = TEST_MUTEX.lock().expect("Test mutex poisoned");
+
     init_test();
 
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "GCP-Secret-Manager");
@@ -316,7 +461,15 @@ async fn test_gcp_provider_get_secret_value_success() {
         i
     });
 
-    let (_mock_server, _base_url) = setup_provider(&mut pact_builder, "test-project");
+    let _mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = _mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+
+    // Set up Pact environment variables using test fixture
+    // The fixture will automatically clean up when it goes out of scope
+    let _fixture = setup_pact_environment(base_url.clone()).await;
 
     let provider = SecretManagerREST::new("test-project".to_string(), None, None)
         .await
@@ -331,11 +484,15 @@ async fn test_gcp_provider_get_secret_value_success() {
         "Secret value should match"
     );
 
-    cleanup();
+    // Explicit teardown to ensure cleanup happens synchronously
+    _fixture.teardown();
 }
 
 #[tokio::test]
 async fn test_gcp_provider_get_secret_value_not_found() {
+    // Acquire test mutex to ensure sequential execution
+    let _guard = TEST_MUTEX.lock().expect("Test mutex poisoned");
+
     init_test();
 
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "GCP-Secret-Manager");
@@ -359,7 +516,15 @@ async fn test_gcp_provider_get_secret_value_not_found() {
         i
     });
 
-    let (_mock_server, _base_url) = setup_provider(&mut pact_builder, "test-project");
+    let _mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = _mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+
+    // Set up Pact environment variables using test fixture
+    // The fixture will automatically clean up when it goes out of scope
+    let _fixture = setup_pact_environment(base_url.clone()).await;
 
     let provider = SecretManagerREST::new("test-project".to_string(), None, None)
         .await
@@ -374,11 +539,15 @@ async fn test_gcp_provider_get_secret_value_not_found() {
         "Should return None for non-existent secret"
     );
 
-    cleanup();
+    // Explicit teardown to ensure cleanup happens synchronously
+    _fixture.teardown();
 }
 
 #[tokio::test]
 async fn test_gcp_provider_delete_secret_success() {
+    // Acquire test mutex to ensure sequential execution
+    let _guard = TEST_MUTEX.lock().expect("Test mutex poisoned");
+
     init_test();
 
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "GCP-Secret-Manager");
@@ -396,7 +565,15 @@ async fn test_gcp_provider_delete_secret_success() {
         i
     });
 
-    let (_mock_server, _base_url) = setup_provider(&mut pact_builder, "test-project");
+    let _mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = _mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+
+    // Set up Pact environment variables using test fixture
+    // The fixture will automatically clean up when it goes out of scope
+    let _fixture = setup_pact_environment(base_url.clone()).await;
 
     let provider = SecretManagerREST::new("test-project".to_string(), None, None)
         .await
@@ -406,11 +583,15 @@ async fn test_gcp_provider_delete_secret_success() {
 
     assert!(result.is_ok(), "Failed to delete secret: {:?}", result);
 
-    cleanup();
+    // Explicit teardown to ensure cleanup happens synchronously
+    _fixture.teardown();
 }
 
 #[tokio::test]
 async fn test_gcp_provider_delete_secret_not_found() {
+    // Acquire test mutex to ensure sequential execution
+    let _guard = TEST_MUTEX.lock().expect("Test mutex poisoned");
+
     init_test();
 
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "GCP-Secret-Manager");
@@ -434,7 +615,15 @@ async fn test_gcp_provider_delete_secret_not_found() {
         i
     });
 
-    let (_mock_server, _base_url) = setup_provider(&mut pact_builder, "test-project");
+    let _mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = _mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+
+    // Set up Pact environment variables using test fixture
+    // The fixture will automatically clean up when it goes out of scope
+    let _fixture = setup_pact_environment(base_url.clone()).await;
 
     let provider = SecretManagerREST::new("test-project".to_string(), None, None)
         .await
@@ -450,11 +639,15 @@ async fn test_gcp_provider_delete_secret_not_found() {
         result
     );
 
-    cleanup();
+    // Explicit teardown to ensure cleanup happens synchronously
+    _fixture.teardown();
 }
 
 #[tokio::test]
 async fn test_gcp_provider_error_handling_unauthorized() {
+    // Acquire test mutex to ensure sequential execution
+    let _guard = TEST_MUTEX.lock().expect("Test mutex poisoned");
+
     init_test();
 
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "GCP-Secret-Manager");
@@ -478,7 +671,15 @@ async fn test_gcp_provider_error_handling_unauthorized() {
         i
     });
 
-    let (_mock_server, _base_url) = setup_provider(&mut pact_builder, "test-project");
+    let _mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = _mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+
+    // Set up Pact environment variables using test fixture
+    // The fixture will automatically clean up when it goes out of scope
+    let _fixture = setup_pact_environment(base_url.clone()).await;
 
     let provider = SecretManagerREST::new("test-project".to_string(), None, None)
         .await
@@ -504,11 +705,15 @@ async fn test_gcp_provider_error_handling_unauthorized() {
         error_chain
     );
 
-    cleanup();
+    // Explicit teardown to ensure cleanup happens synchronously
+    _fixture.teardown();
 }
 
 #[tokio::test]
 async fn test_gcp_provider_error_handling_forbidden() {
+    // Acquire test mutex to ensure sequential execution
+    let _guard = TEST_MUTEX.lock().expect("Test mutex poisoned");
+
     init_test();
 
     let mut pact_builder = PactBuilder::new("Secret-Manager-Controller", "GCP-Secret-Manager");
@@ -559,7 +764,15 @@ async fn test_gcp_provider_error_handling_forbidden() {
         i
     });
 
-    let (_mock_server, _base_url) = setup_provider(&mut pact_builder, "test-project");
+    let _mock_server = pact_builder.start_mock_server(None, None);
+    let mut base_url = _mock_server.url().to_string();
+    if base_url.ends_with('/') {
+        base_url.pop();
+    }
+
+    // Set up Pact environment variables using test fixture
+    // The fixture will automatically clean up when it goes out of scope
+    let _fixture = setup_pact_environment(base_url.clone()).await;
 
     let provider = SecretManagerREST::new("test-project".to_string(), None, None)
         .await
@@ -588,5 +801,6 @@ async fn test_gcp_provider_error_handling_forbidden() {
         error_chain
     );
 
-    cleanup();
+    // Explicit teardown to ensure cleanup happens synchronously
+    _fixture.teardown();
 }

@@ -18,8 +18,15 @@ use super::auth::create_credential;
 pub fn construct_vault_url(config: &AzureConfig) -> String {
     // CRITICAL: Override API endpoint BEFORE creating client
     let endpoint_override = {
-        let pact_config = crate::config::PactModeConfig::get();
-        if pact_config.enabled {
+        // Check if PACT_MODE is enabled (drop guard immediately)
+        let enabled = {
+            let pact_config = crate::config::PactModeConfig::get();
+            let enabled = pact_config.enabled;
+            drop(pact_config); // Drop guard before calling override_api_endpoint
+            enabled
+        };
+
+        if enabled {
             use crate::config::PactModeAPIOverride;
             use crate::provider::azure::key_vault::pact_api_override::AzureKeyVaultAPIOverride;
 
@@ -29,7 +36,7 @@ pub fn construct_vault_url(config: &AzureConfig) -> String {
                 tracing::warn!("Failed to override Azure Key Vault API endpoint: {}", e);
             }
 
-            // Get endpoint before dropping the guard
+            // Get endpoint (this will get the config again, but guard is dropped)
             api_override.get_endpoint()
         } else {
             None

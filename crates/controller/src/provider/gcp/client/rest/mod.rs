@@ -58,8 +58,15 @@ impl SecretManagerREST {
         // Determine base URL - use Pact mock server if enabled
         // CRITICAL: Override API endpoint BEFORE creating client
         let base_url = {
-            let pact_config = crate::config::PactModeConfig::get();
-            if pact_config.enabled {
+            // Check if PACT_MODE is enabled (drop guard immediately)
+            let enabled = {
+                let pact_config = crate::config::PactModeConfig::get();
+                let enabled = pact_config.enabled;
+                drop(pact_config); // Drop guard before calling override_api_endpoint
+                enabled
+            };
+
+            if enabled {
                 use crate::config::PactModeAPIOverride;
                 use crate::provider::gcp::client::rest::pact_api_override::GcpSecretManagerAPIOverride;
 
@@ -68,7 +75,7 @@ impl SecretManagerREST {
                     .override_api_endpoint()
                     .context("Failed to override GCP Secret Manager API endpoint for PACT_MODE")?;
 
-                // Get endpoint from config (after dropping MutexGuard)
+                // Get endpoint (this will get the config again, but guard is dropped)
                 api_override
                     .get_endpoint()
                     .unwrap_or_else(|| "https://secretmanager.googleapis.com".to_string())
@@ -91,11 +98,9 @@ impl SecretManagerREST {
         }
 
         info!("Initializing GCP REST client for project: {}", project_id);
-        {
-            let pact_config = crate::config::PactModeConfig::get();
-            if pact_config.enabled {
-                info!("PACT_MODE: Using endpoint {}", base_url);
-            }
+        // Log endpoint if in Pact mode (check without holding guard)
+        if std::env::var("PACT_MODE").is_ok() {
+            info!("PACT_MODE: Using endpoint {}", base_url);
         }
 
         // Create HTTP client with rustls (already configured in Cargo.toml)
