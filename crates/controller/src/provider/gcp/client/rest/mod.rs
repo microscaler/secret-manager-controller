@@ -13,6 +13,7 @@
 //! - [GCP Secret Manager REST API v1](https://docs.cloud.google.com/secret-manager/docs/reference/rest)
 
 mod operations;
+mod pact_api_override;
 mod requests;
 mod responses;
 
@@ -55,21 +56,25 @@ impl SecretManagerREST {
         service_account_email: Option<&str>,
     ) -> Result<Self> {
         // Determine base URL - use Pact mock server if enabled
-        let pact_mode = std::env::var("PACT_MODE").is_ok();
-        let base_url = if pact_mode {
-            let endpoint = std::env::var("GCP_SECRET_MANAGER_ENDPOINT")
-                .unwrap_or_else(|_| "https://secretmanager.googleapis.com".to_string());
+        // CRITICAL: Override API endpoint BEFORE creating client
+        let base_url = {
+            let pact_config = crate::config::PactModeConfig::get();
+            if pact_config.enabled {
+                use crate::config::PactModeAPIOverride;
+                use crate::provider::gcp::client::rest::pact_api_override::GcpSecretManagerAPIOverride;
 
-            // Warn if PACT_MODE is set but endpoint is still pointing to production
-            if endpoint.contains("secretmanager.googleapis.com") {
-                warn!(
-                    "PACT_MODE is enabled but GCP_SECRET_MANAGER_ENDPOINT is not set or points to production API. \
-                    Set GCP_SECRET_MANAGER_ENDPOINT to your mock server URL (e.g., http://gcp-mock-server.secret-manager-controller-pact-broker.svc.cluster.local:1234)"
-                );
+                let api_override = GcpSecretManagerAPIOverride;
+                api_override
+                    .override_api_endpoint()
+                    .context("Failed to override GCP Secret Manager API endpoint for PACT_MODE")?;
+
+                // Get endpoint from config (after dropping MutexGuard)
+                api_override
+                    .get_endpoint()
+                    .unwrap_or_else(|| "https://secretmanager.googleapis.com".to_string())
+            } else {
+                "https://secretmanager.googleapis.com".to_string()
             }
-            endpoint
-        } else {
-            "https://secretmanager.googleapis.com".to_string()
         };
 
         if let Some(email) = service_account_email {
@@ -86,8 +91,11 @@ impl SecretManagerREST {
         }
 
         info!("Initializing GCP REST client for project: {}", project_id);
-        if pact_mode {
-            info!("Pact mode enabled: using endpoint {}", base_url);
+        {
+            let pact_config = crate::config::PactModeConfig::get();
+            if pact_config.enabled {
+                info!("PACT_MODE: Using endpoint {}", base_url);
+            }
         }
 
         // Create HTTP client with rustls (already configured in Cargo.toml)

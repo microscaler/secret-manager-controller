@@ -6,6 +6,7 @@
 //! - `parameter_store`: AWS Systems Manager Parameter Store for config values
 
 pub mod parameter_store;
+mod parameter_store_pact_api_override;
 pub mod secrets_manager;
 
 // Re-export for convenience

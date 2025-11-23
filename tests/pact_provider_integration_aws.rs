@@ -33,6 +33,7 @@ fn init_test() {
 
 /// Set up Pact mode environment variables and ensure they're visible
 /// This helper ensures env vars are set before any async operations
+/// CRITICAL: Also initializes PactModeConfig singleton
 ///
 /// Note: We use multiple yields and a small delay to ensure env vars are visible
 /// when running with cargo llvm-cov, which may have different async timing
@@ -46,6 +47,14 @@ async fn setup_pact_environment(endpoint: &str) {
     tokio::task::yield_now().await;
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     tokio::task::yield_now().await;
+
+    // CRITICAL: Initialize PactModeConfig singleton
+    // This must be done before creating any providers
+    // For tests, we need to handle the case where it might already be initialized
+    if let Err(e) = controller::config::PactModeConfig::init() {
+        // If already initialized, that's okay - just log it
+        eprintln!("Note: PactModeConfig already initialized: {}", e);
+    }
 
     // Verify the environment variables are set correctly
     // We verify exact matches to ensure the correct Pact mock server endpoint is being used

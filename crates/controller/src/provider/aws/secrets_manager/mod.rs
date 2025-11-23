@@ -9,6 +9,7 @@
 
 mod auth;
 mod operations;
+mod pact_api_override;
 
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 

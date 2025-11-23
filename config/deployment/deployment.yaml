@@ -14,15 +14,6 @@ spec:
         app: secret-manager-controller
     spec:
       serviceAccountName: secret-manager-controller
-      # Schedule only on dedicated controller node
-      # This isolates the controller's containerd storage usage from other workloads
-      nodeSelector:
-        controller-dedicated: "true"
-      tolerations:
-      - key: "controller-dedicated"
-        operator: "Equal"
-        value: "true"
-        effect: "NoSchedule"
       containers:
       - name: controller
         image: localhost:5000/secret-manager-controller

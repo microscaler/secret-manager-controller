@@ -14,17 +14,35 @@ use super::auth::create_credential;
 
 /// Construct vault URL from vault name
 /// Supports both full URLs and vault names
-/// In Pact mode, uses the endpoint from environment variable
+/// In Pact mode, uses the endpoint from PactModeAPIOverride
 pub fn construct_vault_url(config: &AzureConfig) -> String {
-    if std::env::var("PACT_MODE").is_ok() {
-        // When PACT_MODE=true, use Pact mock server endpoint
-        if let Ok(endpoint) = std::env::var("AZURE_KEY_VAULT_ENDPOINT") {
-            info!(
-                "Pact mode enabled: routing Azure Key Vault requests to {}",
-                endpoint
-            );
-            return endpoint;
+    // CRITICAL: Override API endpoint BEFORE creating client
+    let endpoint_override = {
+        let pact_config = crate::config::PactModeConfig::get();
+        if pact_config.enabled {
+            use crate::config::PactModeAPIOverride;
+            use crate::provider::azure::key_vault::pact_api_override::AzureKeyVaultAPIOverride;
+
+            let api_override = AzureKeyVaultAPIOverride;
+            if let Err(e) = api_override.override_api_endpoint() {
+                // Log error but continue - endpoint might be set via env var
+                tracing::warn!("Failed to override Azure Key Vault API endpoint: {}", e);
+            }
+
+            // Get endpoint before dropping the guard
+            api_override.get_endpoint()
+        } else {
+            None
         }
+    };
+
+    // Use override endpoint if available
+    if let Some(endpoint) = endpoint_override {
+        info!(
+            "PACT_MODE: Routing Azure Key Vault requests to {}",
+            endpoint
+        );
+        return endpoint;
     }
 
     // Normal mode: use real Azure Key Vault

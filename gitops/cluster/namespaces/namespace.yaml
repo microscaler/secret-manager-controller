@@ -6,6 +6,7 @@ kind: Namespace
 metadata:
   name: microscaler-system
   labels:
+    name: microscaler-system
     environment: system
     managed-by: gitops
 ---

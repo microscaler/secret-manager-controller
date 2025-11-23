@@ -22,8 +22,7 @@ spec:
         app: gcp-mock-server
         provider: gcp
     spec:
-      # Distribute workloads across nodes to avoid disk space issues
-      # The controller-dedicated node is tainted, so workloads won't schedule there
+      # Distribute workloads to avoid resource contention
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:

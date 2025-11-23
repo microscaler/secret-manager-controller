@@ -68,6 +68,11 @@ pub async fn initialize() -> Result<InitializationResult> {
         .install_default()
         .unwrap_or_else(|_| panic!("Failed to install rustls crypto provider"));
 
+    // Initialize PACT_MODE configuration FIRST
+    // This must be done before any provider creation
+    crate::config::PactModeConfig::init()
+        .context("Failed to initialize PACT_MODE configuration")?;
+
     // Initialize OpenTelemetry first (if configured)
     // This will set up tracing with Otel support
     // Note: Otel config can come from CRD, but we initialize early from env vars

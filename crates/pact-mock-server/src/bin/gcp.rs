@@ -12,8 +12,8 @@
 //! - PORT: Port to listen on (default: 1234)
 
 use axum::{
-    extract::{Path, State},
-    http::{Method, StatusCode, Uri},
+    extract::{Path, Request, State},
+    http::{Method, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{delete, get, post},
     Router,
@@ -258,13 +258,23 @@ async fn get_secret_value_access(
 /// - POST /v1/projects/{project}/secrets/{secret}:enable
 /// - POST /v1/projects/{project}/secrets/{secret}/versions/{version}:disable
 /// - POST /v1/projects/{project}/secrets/{secret}/versions/{version}:enable
-async fn handle_colon_routes(
-    State(app_state): State<GcpAppState>,
-    method: Method,
-    uri: Uri,
-    body: Option<axum::extract::Json<serde_json::Value>>,
-) -> Response {
+async fn handle_colon_routes(State(app_state): State<GcpAppState>, request: Request) -> Response {
+    let method = request.method().clone();
+    let uri = request.uri().clone();
     let path = uri.path();
+
+    // Extract body for POST/PATCH/PUT requests
+    let body_value = if method == Method::POST || method == Method::PATCH || method == Method::PUT {
+        let (_parts, body) = request.into_parts();
+        match axum::body::to_bytes(body, usize::MAX).await {
+            Ok(bytes) if !bytes.is_empty() => {
+                serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
 
     // Log the exact request path for debugging
     // Enable with: RUST_LOG=pact_mock_server=debug
@@ -319,7 +329,7 @@ async fn handle_colon_routes(
             .unwrap_or("unknown")
             .to_string();
 
-        if let Some(Json(body_json)) = body {
+        if let Some(body_json) = body_value {
             if let Ok(body) = serde_json::from_value::<AddVersionRequest>(body_json) {
                 info!("  ADD VERSION: project={}, secret={}", project, secret);
                 info!(

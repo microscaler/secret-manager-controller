@@ -8,10 +8,12 @@
 //! The configuration can be hot-reloaded by watching the ConfigMap for changes.
 
 mod controller;
+mod pact_mode;
 mod server;
 mod watch;
 
 pub use controller::ControllerConfig;
+pub use pact_mode::{PactModeAPIOverride, PactModeConfig, ProviderId, ProviderPactConfig};
 pub use server::ServerConfig;
 pub use watch::start_configmap_watch;
 

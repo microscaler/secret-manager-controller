@@ -11,6 +11,7 @@
 mod auth;
 mod client;
 mod operations;
+mod pact_api_override;
 
 pub use auth::MockTokenCredential;
 use azure_core::credentials::TokenCredential;

@@ -5,7 +5,7 @@
 use crate::crd::{AwsAuthConfig, AwsConfig};
 use anyhow::{Context, Result};
 use aws_config::SdkConfig;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Create AWS SDK config using IRSA (IAM Roles for Service Accounts)
 pub async fn create_irsa_config(
@@ -25,49 +25,31 @@ pub async fn create_irsa_config(
     let mut builder = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(aws_config::Region::new(region.to_string()));
 
-    // Support Pact mock server integration via environment variable
+    // Support Pact mock server integration via PactModeAPIOverride trait
     // When PACT_MODE=true, route requests to Pact mock server instead of real AWS
-    // Read environment variables at the time of config creation to ensure they're current
-    let pact_mode = std::env::var("PACT_MODE");
-    if pact_mode.is_ok() {
-        let endpoint = std::env::var("AWS_SECRETS_MANAGER_ENDPOINT")
-            .context("PACT_MODE is enabled but AWS_SECRETS_MANAGER_ENDPOINT is not set. This is required for Pact testing.")?;
+    // CRITICAL: Override API endpoint BEFORE creating SDK config
+    // The AWS SDK reads environment variables during builder.load().await
+    let endpoint_override = {
+        let pact_config = crate::config::PactModeConfig::get();
+        if pact_config.enabled {
+            use crate::config::PactModeAPIOverride;
+            use crate::provider::aws::secrets_manager::pact_api_override::AwsSecretsManagerAPIOverride;
 
-        // Validate endpoint URL is safe (not pointing to production AWS)
-        // Allow localhost, Kubernetes service names, Docker hostnames, and other mock server hostnames
-        let is_production_aws = endpoint.contains("secretsmanager.amazonaws.com")
-            || endpoint.contains("amazonaws.com/secretsmanager");
+            let api_override = AwsSecretsManagerAPIOverride;
+            api_override
+                .override_api_endpoint()
+                .context("Failed to override AWS Secrets Manager API endpoint for PACT_MODE")?;
 
-        if is_production_aws {
-            return Err(anyhow::anyhow!(
-                "PACT_MODE is enabled but endpoint '{}' points to production AWS. \
-                This is not allowed in Pact mode. Use a mock server endpoint instead.",
-                endpoint
-            ));
+            // Get endpoint before dropping the guard
+            api_override.get_endpoint()
+        } else {
+            None
         }
+    };
 
-        // Warn if endpoint doesn't look like a typical mock server (localhost, service name, etc.)
-        let looks_like_mock = endpoint.starts_with("http://localhost")
-            || endpoint.starts_with("http://127.0.0.1")
-            || endpoint.starts_with("http://[::1]")
-            || endpoint.contains("host.docker.internal")
-            || endpoint.contains(".svc.cluster.local")
-            || endpoint.contains("pact")
-            || endpoint.contains("mock");
-
-        if !looks_like_mock {
-            warn!(
-                "PACT_MODE is enabled but endpoint '{}' does not appear to be a mock server. \
-                Verify this is correct and not pointing to production AWS.",
-                endpoint
-            );
-        }
-
-        info!(
-            "Pact mode enabled: routing AWS Secrets Manager requests to {}",
-            endpoint
-        );
-        // Set endpoint_url on the builder - this will be used by all services created from this config
+    // Set endpoint_url on builder as backup (after dropping MutexGuard)
+    // (environment variable should take precedence, but this ensures it works)
+    if let Some(endpoint) = endpoint_override {
         builder = builder.endpoint_url(&endpoint);
     }
 
@@ -81,49 +63,31 @@ pub async fn create_default_config(region: &str) -> Result<SdkConfig> {
     let mut builder = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(aws_config::Region::new(region.to_string()));
 
-    // Support Pact mock server integration via environment variable
+    // Support Pact mock server integration via PactModeAPIOverride trait
     // When PACT_MODE=true, route requests to Pact mock server instead of real AWS
-    // Read environment variables at the time of config creation to ensure they're current
-    let pact_mode = std::env::var("PACT_MODE");
-    if pact_mode.is_ok() {
-        let endpoint = std::env::var("AWS_SECRETS_MANAGER_ENDPOINT")
-            .context("PACT_MODE is enabled but AWS_SECRETS_MANAGER_ENDPOINT is not set. This is required for Pact testing.")?;
+    // CRITICAL: Override API endpoint BEFORE creating SDK config
+    // The AWS SDK reads environment variables during builder.load().await
+    let endpoint_override = {
+        let pact_config = crate::config::PactModeConfig::get();
+        if pact_config.enabled {
+            use crate::config::PactModeAPIOverride;
+            use crate::provider::aws::secrets_manager::pact_api_override::AwsSecretsManagerAPIOverride;
 
-        // Validate endpoint URL is safe (not pointing to production AWS)
-        // Allow localhost, Kubernetes service names, Docker hostnames, and other mock server hostnames
-        let is_production_aws = endpoint.contains("secretsmanager.amazonaws.com")
-            || endpoint.contains("amazonaws.com/secretsmanager");
+            let api_override = AwsSecretsManagerAPIOverride;
+            api_override
+                .override_api_endpoint()
+                .context("Failed to override AWS Secrets Manager API endpoint for PACT_MODE")?;
 
-        if is_production_aws {
-            return Err(anyhow::anyhow!(
-                "PACT_MODE is enabled but endpoint '{}' points to production AWS. \
-                This is not allowed in Pact mode. Use a mock server endpoint instead.",
-                endpoint
-            ));
+            // Get endpoint before dropping the guard
+            api_override.get_endpoint()
+        } else {
+            None
         }
+    };
 
-        // Warn if endpoint doesn't look like a typical mock server (localhost, service name, etc.)
-        let looks_like_mock = endpoint.starts_with("http://localhost")
-            || endpoint.starts_with("http://127.0.0.1")
-            || endpoint.starts_with("http://[::1]")
-            || endpoint.contains("host.docker.internal")
-            || endpoint.contains(".svc.cluster.local")
-            || endpoint.contains("pact")
-            || endpoint.contains("mock");
-
-        if !looks_like_mock {
-            warn!(
-                "PACT_MODE is enabled but endpoint '{}' does not appear to be a mock server. \
-                Verify this is correct and not pointing to production AWS.",
-                endpoint
-            );
-        }
-
-        info!(
-            "Pact mode enabled: routing AWS Secrets Manager requests to {}",
-            endpoint
-        );
-        // Set endpoint_url on the builder - this will be used by all services created from this config
+    // Set endpoint_url on builder as backup (after dropping MutexGuard)
+    // (environment variable should take precedence, but this ensures it works)
+    if let Some(endpoint) = endpoint_override {
         builder = builder.endpoint_url(&endpoint);
     }
 
