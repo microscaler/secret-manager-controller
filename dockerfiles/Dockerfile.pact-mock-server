@@ -8,7 +8,8 @@ FROM docker.io/microscaler/pact-mock-server-base-image:latest
 # - Non-root user (pact)
 # - /app directory with proper permissions
 # - Environment variables (RUST_BACKTRACE, RUST_LOG)
-# - Exposed ports (1234, 8080)
+# - Exposed ports (1234, 1235, 1236, 1237)
+# - pact-broker CLI (Ruby gem) for manager sidecar
 
 # WORKDIR is already set to /app in base image
 

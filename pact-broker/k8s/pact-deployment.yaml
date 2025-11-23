@@ -5,7 +5,7 @@
 #
 # Contains:
 # - pact-broker: Main Pact Broker service (port 9292)
-# - mock-webhook: Webhook receiver for testing (port 8080)
+# - mock-webhook: Webhook receiver for testing (port 1237)
 # - aws-mock-server: AWS Secrets Manager mock (port 1234)
 # - gcp-mock-server: GCP Secret Manager mock (port 1235)
 # - azure-mock-server: Azure Key Vault mock (port 1236)
@@ -105,11 +105,11 @@ spec:
         imagePullPolicy: Always
         command: ["/app/webhook"]
         ports:
-        - containerPort: 8080
+        - containerPort: 1237
           name: http
         env:
         - name: PORT
-          value: "8080"
+          value: "1237"
         resources:
           requests:
             memory: 64Mi
@@ -120,7 +120,7 @@ spec:
         startupProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 1237
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 2
@@ -129,7 +129,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 1237
           initialDelaySeconds: 2
           periodSeconds: 30
           timeoutSeconds: 1
@@ -137,7 +137,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 1237
           initialDelaySeconds: 10
           periodSeconds: 30
           timeoutSeconds: 2
@@ -167,7 +167,7 @@ spec:
         - name: PORT
           value: "1234"
         - name: MANAGER_URL
-          value: "http://localhost:8081"
+          value: "http://localhost:1238"
         resources:
           requests:
             memory: 64Mi
@@ -225,7 +225,7 @@ spec:
         - name: PORT
           value: "1235"
         - name: MANAGER_URL
-          value: "http://localhost:8081"
+          value: "http://localhost:1238"
         resources:
           requests:
             memory: 64Mi
@@ -283,7 +283,7 @@ spec:
         - name: PORT
           value: "1236"
         - name: MANAGER_URL
-          value: "http://localhost:8081"
+          value: "http://localhost:1238"
         resources:
           requests:
             memory: 64Mi
@@ -356,9 +356,9 @@ spec:
         - name: BROKER_TIMEOUT_SECS
           value: "90"
         - name: HEALTH_PORT
-          value: "8081"
+          value: "1238"
         ports:
-        - containerPort: 8081
+        - containerPort: 1238
           name: health
           protocol: TCP
         volumeMounts:
@@ -370,7 +370,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /healthz
-            port: 8081
+            port: 1238
           initialDelaySeconds: 10
           periodSeconds: 30
           timeoutSeconds: 3
@@ -378,7 +378,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /ready
-            port: 8081
+            port: 1238
           initialDelaySeconds: 5
           periodSeconds: 10
           timeoutSeconds: 3
@@ -439,8 +439,8 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-  - port: 8080
-    targetPort: 8080
+  - port: 1237
+    targetPort: 1237
     protocol: TCP
     name: http
   selector:

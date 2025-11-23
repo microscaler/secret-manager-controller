@@ -212,6 +212,17 @@ fn publish_pact(config: &ManagerConfig, provider_name: &str, pact_file: &str) ->
     info!("   Broker URL: {}", config.broker_url);
     info!("   Pact file path: {}", pact_path.display());
 
+    // Check if pact-broker CLI is available
+    if which::which("pact-broker").is_err() {
+        error!("❌ pact-broker CLI not found in PATH");
+        error!("   Please ensure pact-broker-client gem is installed");
+        error!(
+            "   PATH: {}",
+            std::env::var("PATH").unwrap_or_else(|_| "not set".to_string())
+        );
+        return Ok(false);
+    }
+
     let output = Command::new("pact-broker")
         .arg("publish")
         .arg(pact_path.as_os_str())
@@ -226,7 +237,12 @@ fn publish_pact(config: &ManagerConfig, provider_name: &str, pact_file: &str) ->
         .arg("--broker-password")
         .arg(&config.password)
         .output()
-        .context("Failed to execute pact-broker publish")?;
+        .with_context(|| {
+            format!(
+                "Failed to execute pact-broker publish command (provider={}, file={})",
+                provider_name, pact_file
+            )
+        })?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -245,10 +261,15 @@ fn publish_pact(config: &ManagerConfig, provider_name: &str, pact_file: &str) ->
             "❌ Failed to publish pact contract: provider={}, version={}",
             provider_name, provider_version
         );
-        error!("   Error details: {}", stderr);
+        if !stderr.trim().is_empty() {
+            error!("   Error details: {}", stderr.trim());
+        } else {
+            error!("   No error details available (stderr empty)");
+        }
         if !stdout.trim().is_empty() {
             error!("   Output: {}", stdout.trim());
         }
+        error!("   Exit code: {:?}", output.status.code());
         Ok(false)
     }
 }
@@ -478,8 +499,8 @@ async fn watch_configmap(
             );
         }
         Ok(false) => {
-            warn!(
-                "⚠️  ConfigMap {}/{} exists but has no pact files yet",
+            info!(
+                "ℹ️  ConfigMap {}/{} exists but has no pact files yet (this is expected - pact files will be added when tests run)",
                 namespace, configmap_name
             );
         }
@@ -658,8 +679,8 @@ async fn main() -> Result<()> {
             info!("✅ ConfigMap found with pact files");
         }
         Ok(false) => {
-            warn!(
-                "⚠️  ConfigMap exists but has no pact files yet - will publish when files are added"
+            info!(
+                "ℹ️  ConfigMap exists but has no pact files yet (this is expected - will publish when pact files are added to ConfigMap)"
             );
         }
         Err(e) => {
@@ -727,9 +748,9 @@ async fn main() -> Result<()> {
         .with_state(health_state);
 
     let health_port = std::env::var("HEALTH_PORT")
-        .unwrap_or_else(|_| "8081".to_string())
+        .unwrap_or_else(|_| "1238".to_string())
         .parse()
-        .unwrap_or(8081);
+        .unwrap_or(1238);
 
     info!("🏥 Starting health server on port {}...", health_port);
     let server_handle = tokio::spawn(async move {

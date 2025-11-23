@@ -478,8 +478,8 @@ def main() -> int:
     parser.add_argument(
         "--manager-port",
         type=int,
-        default=8081,
-        help="Manager health port (default: 8081)"
+        default=1238,
+        help="Manager health port (default: 1238)"
     )
     parser.add_argument(
         "--manager-timeout",
@@ -533,7 +533,7 @@ def main() -> int:
                     namespace,
                     pod_name,  # Port-forward to pod directly
                     args.manager_port,
-                    8081  # Manager's health port
+                    1238  # Manager's health port
                 )
                 port_forward_process = broker_port_forward  # Keep broker port forward for cleanup
             else:

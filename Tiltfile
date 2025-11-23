@@ -396,9 +396,26 @@ custom_build(
 )
 
 # Apply Pact infrastructure Kubernetes resources
-# Order matters: ConfigMap is created first, then deployment
-# ConfigMap is populated automatically by init containers in the deployment
+# Order matters: ConfigMap is created first, then populated, then deployment
 k8s_yaml(kustomize('pact-broker/k8s'))
+
+# ====================
+# Populate Pact ConfigMap
+# ====================
+# Populate the pact-contracts ConfigMap from local pact files in target/pacts/
+# This runs whenever pact files are generated or changed
+# The ConfigMap is then used by the manager sidecar to publish contracts
+local_resource(
+    'populate-pact-configmap',
+    cmd='python3 scripts/tilt/populate_pact_configmap.py',
+    deps=[
+        'scripts/tilt/populate_pact_configmap.py',
+        'target/pacts',  # Watch the entire directory for changes
+    ],
+    labels=['pact'],
+    resource_deps=[],  # Can run independently, but should run before pact-infrastructure
+    allow_parallel=False,
+)
 
 # Combined Pact Infrastructure Deployment
 # All Pact components (broker, mock servers, webhook) are now in a single deployment
@@ -411,13 +428,14 @@ k8s_yaml(kustomize('pact-broker/k8s'))
 k8s_resource(
     'pact-infrastructure',
     labels=['pact'],
-    port_forwards=['9292:9292', '8080:8080'],  # Forward broker and webhook ports
+    port_forwards=['9292:9292', '1237:1237'],  # Forward broker and webhook ports
+    resource_deps=['populate-pact-configmap'],  # Wait for ConfigMap to be populated
     # Tilt automatically detects image dependencies from k8s_yaml
     # The deployment references 'pact-mock-server' and 'mock-webhook' images
     # which are built by custom_build resources above
     # All services (pact-broker, aws-mock-server, gcp-mock-server, azure-mock-server, mock-webhook)
     # are part of this single deployment, accessed via their respective services
-    # Contract publishing is handled by init containers in the deployment
+    # Contract publishing is handled by the manager sidecar which reads from the ConfigMap
 )
 
 # ====================
