@@ -100,7 +100,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # OpenTelemetry
 opentelemetry = "0.31"
 opentelemetry_sdk = "0.31"
-tracing-opentelemetry = "0.25"
+tracing-opentelemetry = "0.32"
 
 # Datadog OpenTelemetry integration
 # Provides full APM/tracing support with Datadog-specific features
