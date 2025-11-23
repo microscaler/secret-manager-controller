@@ -36,6 +36,21 @@ brew install musl-cross
 sudo apt-get install musl-tools
 \`\`\`
 
+### 2.5. Install Git Hooks
+
+Install Git hooks to enforce commit message conventions and code quality:
+
+\`\`\`bash
+# Install Git hooks (commit-msg validation, pre-commit checks)
+./scripts/install-git-hooks.sh
+\`\`\`
+
+This installs:
+- **commit-msg hook**: Validates that commit messages follow the [Conventional Commits](../guidelines/conventional-commits.md) specification
+- **pre-commit hook**: Runs SOPS encryption checks and Rust code formatting
+
+**Note:** The hooks will automatically validate your commits. See [Conventional Commits](../guidelines/conventional-commits.md) for details on the commit message format.
+
 ### 3. Build the Project
 
 \`\`\`bash
@@ -297,7 +312,7 @@ cargo run -p controller --bin crdgen
 - [Kind Cluster Setup](./kind-cluster-setup.md) - Local cluster setup
 - [Testing Guide](../testing/testing-guide.md) - Testing strategies
 
-`,b=Object.freeze(Object.defineProperty({__proto__:null,default:e},Symbol.toStringTag,{value:"Module"})),n=`# Tilt Integration
+`,A=Object.freeze(Object.defineProperty({__proto__:null,default:e},Symbol.toStringTag,{value:"Module"})),n=`# Tilt Integration
 
 Complete guide to using Tilt for local development of the Secret Manager Controller.
 
@@ -559,7 +574,338 @@ The \`Tiltfile\` is organized into sections:
 - [Testing Guide](../testing/testing-guide.md) - Testing strategies
 - [Development Setup](./setup.md) - General development guide
 
-`,A=Object.freeze(Object.defineProperty({__proto__:null,default:n},Symbol.toStringTag,{value:"Module"})),t=`# Configuration Options
+`,k=Object.freeze(Object.defineProperty({__proto__:null,default:n},Symbol.toStringTag,{value:"Module"})),t=`# Conventional Commits
+
+This project follows the [Conventional Commits](https://www.conventionalcommits.org/) specification for commit messages. This ensures consistent, readable commit history and enables automated tooling.
+
+## Format
+
+\`\`\`
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+\`\`\`
+
+## Commit Types
+
+### \`feat\`
+A new feature.
+
+**Examples:**
+\`\`\`
+feat: add support for Azure Key Vault
+feat(aws): implement Parameter Store integration
+feat(cli): add reconcile command to msmctl
+\`\`\`
+
+### \`fix\`
+A bug fix.
+
+**Examples:**
+\`\`\`
+fix: correct secret name validation
+fix(gcp): handle missing project ID gracefully
+fix(parser): resolve SOPS decryption edge case
+\`\`\`
+
+### \`docs\`
+Documentation only changes.
+
+**Examples:**
+\`\`\`
+docs: update installation guide
+docs(api): add CRD reference documentation
+docs: fix typo in SOPS setup guide
+\`\`\`
+
+### \`style\`
+Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc).
+
+**Examples:**
+\`\`\`
+style: format code with cargo fmt
+style(parser): improve code readability
+\`\`\`
+
+### \`refactor\`
+A code change that neither fixes a bug nor adds a feature.
+
+**Examples:**
+\`\`\`
+refactor: reorganize provider modules
+refactor(parser): simplify file parsing logic
+refactor(reconciler): extract common validation logic
+\`\`\`
+
+### \`perf\`
+A code change that improves performance.
+
+**Examples:**
+\`\`\`
+perf: optimize secret sync operations
+perf(parser): cache parsed file contents
+\`\`\`
+
+### \`test\`
+Adding missing tests or correcting existing tests.
+
+**Examples:**
+\`\`\`
+test: add integration tests for GCP provider
+test(aws): fix flaky parameter store test
+test: increase coverage for parser module
+\`\`\`
+
+### \`build\`
+Changes that affect the build system or external dependencies (example scopes: cargo, docker, tilt).
+
+**Examples:**
+\`\`\`
+build: update Rust toolchain to 1.75
+build(docker): optimize base image size
+build(tilt): add docs-site resource
+\`\`\`
+
+### \`ci\`
+Changes to CI configuration files and scripts.
+
+**Examples:**
+\`\`\`
+ci: add GitHub Actions workflow
+ci: fix Kind cluster setup in CI
+ci: update Pact test execution
+\`\`\`
+
+### \`chore\`
+Other changes that don't modify src or test files (maintenance tasks, tooling updates, etc).
+
+**Examples:**
+\`\`\`
+chore: update dependencies
+chore: remove unused scripts
+chore: update .gitignore
+\`\`\`
+
+### \`revert\`
+Reverts a previous commit.
+
+**Examples:**
+\`\`\`
+revert: revert "feat: add Azure App Configuration support"
+revert(aws): revert Parameter Store changes
+\`\`\`
+
+## Scope
+
+The scope is optional and should be the area of the codebase affected by the change.
+
+**Common scopes:**
+- \`aws\`, \`gcp\`, \`azure\` - Provider-specific changes
+- \`parser\` - File parsing logic
+- \`reconciler\` - Reconciliation logic
+- \`cli\` - Command-line interface
+- \`docs\` - Documentation
+- \`test\` - Testing
+- \`ci\` - CI/CD
+- \`build\` - Build system
+
+**Examples:**
+\`\`\`
+feat(aws): add Parameter Store support
+fix(gcp): correct authentication flow
+docs(cli): update msmctl usage guide
+\`\`\`
+
+## Description
+
+The description should:
+- Be written in imperative mood ("add feature" not "added feature" or "adds feature")
+- Start with a lowercase letter (unless using breaking change indicator)
+- Not end with a period
+- Be concise but descriptive (minimum 10 characters)
+
+**Good:**
+\`\`\`
+feat: add support for AGE encryption keys
+fix(aws): handle missing region gracefully
+docs: update SOPS setup guide
+\`\`\`
+
+**Bad:**
+\`\`\`
+feat: Added new feature.
+fix: bug fix
+docs: docs
+\`\`\`
+
+## Breaking Changes
+
+Use \`!\` after the type/scope to indicate a breaking change.
+
+**Format:**
+\`\`\`
+<type>[optional scope]!: <description>
+\`\`\`
+
+**Examples:**
+\`\`\`
+feat!: change CRD API version to v1
+refactor(parser)!: restructure file parsing API
+\`\`\`
+
+Breaking changes should also include a \`BREAKING CHANGE:\` footer:
+
+\`\`\`
+feat!: change CRD API version to v1
+
+BREAKING CHANGE: The SecretManagerConfig CRD now uses v1 API version.
+Previous v1alpha1 resources must be migrated.
+\`\`\`
+
+## Body
+
+The body is optional and should:
+- Provide additional context about the change
+- Explain the "what" and "why" (not the "how")
+- Be separated from the description by a blank line
+- Wrap at 72 characters
+
+**Example:**
+\`\`\`
+feat: add support for AGE encryption keys
+
+AGE (Actually Good Encryption) is a modern alternative to GPG
+for SOPS encryption. This adds support for AGE keys alongside
+existing GPG key support, providing users with more flexibility
+in their encryption setup.
+\`\`\`
+
+## Footer
+
+Footers are optional and can include:
+- Breaking changes: \`BREAKING CHANGE: <description>\`
+- Issue references: \`Closes #123\`, \`Fixes #456\`
+- Co-authors: \`Co-authored-by: Name <email>\`
+
+**Example:**
+\`\`\`
+fix(aws): correct secret name validation
+
+The validation logic was incorrectly rejecting valid secret names
+that contained hyphens. This fix updates the regex pattern to
+allow hyphens in secret names.
+
+Fixes #123
+Closes #456
+\`\`\`
+
+## Commit Message Hook
+
+A Git hook automatically validates commit messages to ensure they follow the Conventional Commits specification.
+
+**Validation checks:**
+- ✅ Format matches \`<type>[scope]: <description>\`
+- ✅ Type is one of the allowed types
+- ✅ Description is at least 10 characters
+- ✅ Description starts with lowercase (unless breaking change)
+
+**If validation fails:**
+The commit will be rejected with an error message showing:
+- What format is expected
+- Examples of valid commit messages
+- Your invalid message
+
+**Bypassing the hook (not recommended):**
+\`\`\`bash
+# Use --no-verify flag (only for emergencies)
+git commit --no-verify -m "message"
+\`\`\`
+
+## Examples
+
+### Simple Feature
+\`\`\`
+feat: add support for Azure Key Vault
+\`\`\`
+
+### Feature with Scope
+\`\`\`
+feat(aws): implement Parameter Store integration
+\`\`\`
+
+### Bug Fix
+\`\`\`
+fix(gcp): handle missing project ID gracefully
+\`\`\`
+
+### Documentation Update
+\`\`\`
+docs: update installation guide with new prerequisites
+\`\`\`
+
+### Breaking Change
+\`\`\`
+feat!: change CRD API version to v1
+
+BREAKING CHANGE: The SecretManagerConfig CRD now uses v1 API version.
+Previous v1alpha1 resources must be migrated to the new version.
+\`\`\`
+
+### Complex Change with Body and Footer
+\`\`\`
+feat(parser): add support for application.properties routing
+
+When configs.enabled=true, application.properties files are now
+routed to config stores (Parameter Store, App Configuration)
+instead of secret stores. This provides better separation of
+secrets and configuration values.
+
+Closes #789
+\`\`\`
+
+### Refactoring
+\`\`\`
+refactor(reconciler): extract common validation logic
+
+Moved shared validation functions to a common module to reduce
+code duplication across provider-specific reconcilers.
+\`\`\`
+
+### Test Addition
+\`\`\`
+test: add integration tests for GCP provider
+
+Adds comprehensive integration tests covering:
+- Secret creation and updates
+- SOPS decryption
+- Error handling scenarios
+\`\`\`
+
+## Benefits
+
+Following Conventional Commits provides:
+
+1. **Automated Changelog Generation**: Tools can automatically generate changelogs from commit history
+2. **Semantic Versioning**: Commit types can drive version bumps (feat = minor, fix = patch, breaking = major)
+3. **Better Git History**: Easy to search and filter commits by type
+4. **Clear Communication**: Commit messages clearly communicate the intent of changes
+5. **Tooling Integration**: Works with tools like semantic-release, commitlint, etc.
+
+## Resources
+
+- [Conventional Commits Specification](https://www.conventionalcommits.org/)
+- [Angular Commit Message Guidelines](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#commit)
+- [Commit Message Best Practices](https://chris.beams.io/posts/git-commit/)
+
+## Next Steps
+
+- [Code Style](./code-style.md) - Code formatting and style guidelines
+- [Error Handling](./error-handling.md) - Error handling patterns
+- [Logging](./logging.md) - Logging guidelines
+
+`,P=Object.freeze(Object.defineProperty({__proto__:null,default:t},Symbol.toStringTag,{value:"Module"})),r=`# Configuration Options
 
 Complete list of configuration options for Secret Manager Controller.
 
@@ -633,7 +979,7 @@ Each secret in \`spec.secrets\` can have:
 - \`sops.keySecret.name\` - Secret containing SOPS key
 - \`sops.keySecret.namespace\` - Secret namespace
 
-`,k=Object.freeze(Object.defineProperty({__proto__:null,default:t},Symbol.toStringTag,{value:"Module"})),r=`# CRD Reference
+`,R=Object.freeze(Object.defineProperty({__proto__:null,default:r},Symbol.toStringTag,{value:"Module"})),s=`# CRD Reference
 
 Complete reference for the \`SecretManagerConfig\` Custom Resource Definition.
 
@@ -953,7 +1299,7 @@ See the [Examples](../tutorials/basic-usage.md) section for complete working exa
 - [Configuration Guide](../getting-started/configuration.md) - Detailed configuration guide
 - [Provider APIs](./provider-apis.md) - Provider-specific API details
 - [Configuration Options](./configuration-options.md) - All configuration options
-`,P=Object.freeze(Object.defineProperty({__proto__:null,default:r},Symbol.toStringTag,{value:"Module"})),s=`# Provider APIs
+`,E=Object.freeze(Object.defineProperty({__proto__:null,default:s},Symbol.toStringTag,{value:"Module"})),o=`# Provider APIs
 
 API details for each cloud provider.
 
@@ -1021,7 +1367,7 @@ All providers return standardized errors:
 
 The controller implements rate limiting and retry logic for all providers.
 
-`,R=Object.freeze(Object.defineProperty({__proto__:null,default:s},Symbol.toStringTag,{value:"Module"})),o=`# Components
+`,G=Object.freeze(Object.defineProperty({__proto__:null,default:o},Symbol.toStringTag,{value:"Module"})),a=`# Components
 
 Detailed documentation of the Secret Manager Controller components.
 
@@ -1280,7 +1626,7 @@ Components are tested at multiple levels:
 - [Architecture Overview](./overview.md) - High-level architecture
 - [API Reference](../api-reference/crd-reference.md) - CRD reference
 - [Development Guide](../../contributor/development/setup.md) - Contributing
-`,E=Object.freeze(Object.defineProperty({__proto__:null,default:o},Symbol.toStringTag,{value:"Module"})),a=`# Architecture Overview
+`,O=Object.freeze(Object.defineProperty({__proto__:null,default:a},Symbol.toStringTag,{value:"Module"})),i=`# Architecture Overview
 
 The Secret Manager Controller is a Kubernetes operator that syncs secrets from GitOps repositories to cloud secret management systems.
 
@@ -1550,7 +1896,7 @@ See [Serverless Integration](./serverless-integration.md) for complete serverles
 - [Components](./components.md) - Detailed component documentation
 - [Getting Started](../getting-started/installation.md) - Installation guide
 - [Configuration](../getting-started/configuration.md) - Configuration options
-`,G=Object.freeze(Object.defineProperty({__proto__:null,default:a},Symbol.toStringTag,{value:"Module"})),i=`# Serverless Integration Architecture
+`,w=Object.freeze(Object.defineProperty({__proto__:null,default:i},Symbol.toStringTag,{value:"Module"})),c=`# Serverless Integration Architecture
 
 Complete guide to how the Secret Manager Controller integrates with serverless systems and Crossplane.
 
@@ -2176,7 +2522,7 @@ api_retries = int(os.environ["API_RETRIES"])  # 3
 - [Configuration Reference](../getting-started/configuration.md) - Complete configuration guide
 - [Provider Setup](../guides/aws-setup.md) - Provider-specific setup
 
-`,O=Object.freeze(Object.defineProperty({__proto__:null,default:i},Symbol.toStringTag,{value:"Module"})),c=`# Configuration
+`,D=Object.freeze(Object.defineProperty({__proto__:null,default:c},Symbol.toStringTag,{value:"Module"})),l=`# Configuration
 
 Complete guide to configuring the Secret Manager Controller.
 
@@ -2433,7 +2779,7 @@ See the [Examples](../tutorials/basic-usage.md) section for complete working exa
 - [API Reference](../api-reference/crd-reference.md) - Complete CRD reference
 - [Provider Setup Guides](../guides/aws-setup.md) - Detailed provider configuration
 - [Tutorials](../tutorials/basic-usage.md) - Step-by-step tutorials
-`,D=Object.freeze(Object.defineProperty({__proto__:null,default:c},Symbol.toStringTag,{value:"Module"})),l=`# Installation
+`,T=Object.freeze(Object.defineProperty({__proto__:null,default:l},Symbol.toStringTag,{value:"Module"})),p=`# Installation
 
 This guide will help you install the Secret Manager Controller in your Kubernetes cluster.
 
@@ -2515,7 +2861,7 @@ See the provider-specific setup guides:
 - [Quick Start Guide](./quick-start.md) - Get up and running in minutes
 - [Configuration](./configuration.md) - Learn about configuration options
 - [Architecture Overview](../architecture/overview.md) - Understand how it works
-`,w=Object.freeze(Object.defineProperty({__proto__:null,default:l},Symbol.toStringTag,{value:"Module"})),p=`# Quick Start
+`,x=Object.freeze(Object.defineProperty({__proto__:null,default:p},Symbol.toStringTag,{value:"Module"})),u=`# Quick Start
 
 Get the Secret Manager Controller up and running in minutes with this quick start guide.
 
@@ -2681,7 +3027,7 @@ Common issues:
 - [Configuration Guide](./configuration.md) - Learn about all configuration options
 - [Provider Setup Guides](../guides/aws-setup.md) - Detailed provider configuration
 - [Architecture Overview](../architecture/overview.md) - Understand the system architecture
-`,M=Object.freeze(Object.defineProperty({__proto__:null,default:p},Symbol.toStringTag,{value:"Module"})),u=`# Application Files Guide
+`,M=Object.freeze(Object.defineProperty({__proto__:null,default:u},Symbol.toStringTag,{value:"Module"})),m=`# Application Files Guide
 
 Complete guide to the application file formats supported by the Secret Manager Controller.
 
@@ -3156,7 +3502,7 @@ See [SOPS Setup Guide](./sops-setup.md) for troubleshooting SOPS issues.
 - [Configuration Reference](../getting-started/configuration.md) - Complete configuration guide
 - [Config Store Setup](../getting-started/configuration.md#config-store-configuration) - Enable config stores
 
-`,T=Object.freeze(Object.defineProperty({__proto__:null,default:u},Symbol.toStringTag,{value:"Module"})),m=`# AWS Setup Guide
+`,_=Object.freeze(Object.defineProperty({__proto__:null,default:m},Symbol.toStringTag,{value:"Module"})),d=`# AWS Setup Guide
 
 Configure the Secret Manager Controller to work with AWS Secrets Manager.
 
@@ -3281,7 +3627,7 @@ spec:
 - [GCP Setup](./gcp-setup.md)
 - [GitOps Integration](./gitops-integration.md)
 
-`,x=Object.freeze(Object.defineProperty({__proto__:null,default:m},Symbol.toStringTag,{value:"Module"})),d=`# Azure Setup Guide
+`,I=Object.freeze(Object.defineProperty({__proto__:null,default:d},Symbol.toStringTag,{value:"Module"})),g=`# Azure Setup Guide
 
 Configure the Secret Manager Controller to work with Azure Key Vault.
 
@@ -3353,7 +3699,7 @@ Your service principal needs:
 
 See [AWS Setup Guide](./aws-setup.md) for common troubleshooting steps.
 
-`,_=Object.freeze(Object.defineProperty({__proto__:null,default:d},Symbol.toStringTag,{value:"Module"})),g=`# GCP Setup Guide
+`,F=Object.freeze(Object.defineProperty({__proto__:null,default:g},Symbol.toStringTag,{value:"Module"})),f=`# GCP Setup Guide
 
 Configure the Secret Manager Controller to work with GCP Secret Manager.
 
@@ -3427,7 +3773,7 @@ Your service account needs:
 
 See [AWS Setup Guide](./aws-setup.md) for common troubleshooting steps.
 
-`,I=Object.freeze(Object.defineProperty({__proto__:null,default:g},Symbol.toStringTag,{value:"Module"})),y=`# GitOps Integration
+`,K=Object.freeze(Object.defineProperty({__proto__:null,default:f},Symbol.toStringTag,{value:"Module"})),y=`# GitOps Integration
 
 The Secret Manager Controller is GitOps-agnostic and works with both FluxCD and ArgoCD.
 
@@ -3691,7 +4037,7 @@ spec:
 - [SOPS Setup](./sops-setup.md) - Encrypt secrets in Git
 - [Provider Setup Guides](./aws-setup.md) - Configure cloud providers
 - [Configuration Reference](../getting-started/configuration.md) - Complete configuration guide
-`,F=Object.freeze(Object.defineProperty({__proto__:null,default:y},Symbol.toStringTag,{value:"Module"})),f=`# MSMCTL CLI
+`,N=Object.freeze(Object.defineProperty({__proto__:null,default:y},Symbol.toStringTag,{value:"Module"})),S=`# MSMCTL CLI
 
 \`msmctl\` (Microscaler Secret Manager Controller) is a command-line tool for interacting with the Secret Manager Controller running in Kubernetes. Similar to \`fluxctl\`, it provides commands to trigger reconciliations, view status, and manage SecretManagerConfig resources.
 
@@ -4179,7 +4525,7 @@ This will delete and wait for GitOps to recreate the resource, then trigger reco
 - [Configuration Reference](../getting-started/configuration.md) - Learn about configuration options
 - [Troubleshooting](../tutorials/troubleshooting.md) - Common issues and solutions
 
-`,K=Object.freeze(Object.defineProperty({__proto__:null,default:f},Symbol.toStringTag,{value:"Module"})),S=`# SOPS Setup
+`,L=Object.freeze(Object.defineProperty({__proto__:null,default:S},Symbol.toStringTag,{value:"Module"})),h=`# SOPS Setup
 
 Guide for setting up SOPS encryption for secrets in Git repositories.
 
@@ -4636,7 +4982,7 @@ SOPS private keys should be placed in the **same namespace** as the \`SecretMana
 - [GitOps Integration](./gitops-integration.md) - Set up GitOps workflow
 - [Quick Start](../getting-started/quick-start.md) - Get started quickly
 - [Configuration](../getting-started/configuration.md) - Complete configuration guide
-`,L=Object.freeze(Object.defineProperty({__proto__:null,default:S},Symbol.toStringTag,{value:"Module"})),h=`# Advanced Scenarios
+`,z=Object.freeze(Object.defineProperty({__proto__:null,default:h},Symbol.toStringTag,{value:"Module"})),v=`# Advanced Scenarios
 
 Advanced usage patterns and scenarios.
 
@@ -4747,7 +5093,7 @@ spec:
 - [Troubleshooting](./troubleshooting.md)
 - [API Reference](../api-reference/)
 
-`,N=Object.freeze(Object.defineProperty({__proto__:null,default:h},Symbol.toStringTag,{value:"Module"})),v=`# Basic Usage Tutorial
+`,U=Object.freeze(Object.defineProperty({__proto__:null,default:v},Symbol.toStringTag,{value:"Module"})),C=`# Basic Usage Tutorial
 
 Learn how to use Secret Manager Controller with a simple example.
 
@@ -4831,7 +5177,7 @@ spec:
 - [Advanced Scenarios](./advanced-scenarios.md)
 - [Troubleshooting](./troubleshooting.md)
 
-`,z=Object.freeze(Object.defineProperty({__proto__:null,default:v},Symbol.toStringTag,{value:"Module"})),C=`# Troubleshooting Guide
+`,W=Object.freeze(Object.defineProperty({__proto__:null,default:C},Symbol.toStringTag,{value:"Module"})),b=`# Troubleshooting Guide
 
 Common issues and solutions.
 
@@ -4942,4 +5288,4 @@ kubectl apply -f config.yaml
 - [Basic Usage](./basic-usage.md)
 - [Advanced Scenarios](./advanced-scenarios.md)
 
-`,U=Object.freeze(Object.defineProperty({__proto__:null,default:C},Symbol.toStringTag,{value:"Module"}));export{P as a,E as b,k as c,O as d,D as e,T as f,x as g,_ as h,w as i,I as j,F as k,L as l,K as m,N as n,G as o,R as p,M as q,z as r,b as s,A as t,U as u};
+`,V=Object.freeze(Object.defineProperty({__proto__:null,default:b},Symbol.toStringTag,{value:"Module"}));export{R as a,E as b,P as c,O as d,D as e,T as f,_ as g,I as h,x as i,F as j,K as k,N as l,L as m,z as n,w as o,G as p,M as q,U as r,A as s,k as t,W as u,V as v};

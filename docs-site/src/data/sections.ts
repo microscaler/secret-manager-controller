@@ -98,6 +98,7 @@ export const contributorSections: DocSection[] = [
     id: 'guidelines',
     title: 'Guidelines',
     pages: [
+      { id: 'conventional-commits', title: 'Conventional Commits', file: 'guidelines/conventional-commits.md' },
       { id: 'error-handling', title: 'Error Handling', file: 'guidelines/error-handling.md' },
       { id: 'logging', title: 'Logging', file: 'guidelines/logging.md' },
       { id: 'code-style', title: 'Code Style', file: 'guidelines/code-style.md' },

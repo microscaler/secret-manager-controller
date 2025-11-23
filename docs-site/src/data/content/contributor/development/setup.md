@@ -36,6 +36,21 @@ brew install musl-cross
 sudo apt-get install musl-tools
 ```
 
+### 2.5. Install Git Hooks
+
+Install Git hooks to enforce commit message conventions and code quality:
+
+```bash
+# Install Git hooks (commit-msg validation, pre-commit checks)
+./scripts/install-git-hooks.sh
+```
+
+This installs:
+- **commit-msg hook**: Validates that commit messages follow the [Conventional Commits](../guidelines/conventional-commits.md) specification
+- **pre-commit hook**: Runs SOPS encryption checks and Rust code formatting
+
+**Note:** The hooks will automatically validate your commits. See [Conventional Commits](../guidelines/conventional-commits.md) for details on the commit message format.
+
 ### 3. Build the Project
 
 ```bash
