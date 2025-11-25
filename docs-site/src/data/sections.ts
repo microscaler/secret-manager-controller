@@ -41,6 +41,7 @@ export const userSections: DocSection[] = [
       { id: 'gitops-integration', title: 'GitOps Integration', file: 'guides/gitops-integration.md' },
       { id: 'sops-setup', title: 'SOPS Setup', file: 'guides/sops-setup.md' },
       { id: 'application-files', title: 'Application Files', file: 'guides/application-files.md' },
+      { id: 'hot-reload', title: 'Hot Reload', file: 'guides/hot-reload.md' },
       { id: 'msmctl-cli', title: 'MSMCTL CLI', file: 'guides/msmctl-cli.md' },
     ],
   },
