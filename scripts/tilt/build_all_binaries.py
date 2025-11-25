@@ -232,7 +232,9 @@ def main():
         print(f"   kubectl apply -f {crd_output_path}", file=sys.stderr)
         return
     
-    # Apply CRD with validation first, fallback to --validate=false if needed
+    # Apply/update CRD (idempotent - updates if changed, no-op if same)
+    # Note: CRD may already be installed from cluster setup (setup_kind.py)
+    # This ensures we have the latest version if the code has changed
     apply_result = run_command(
         f"kubectl apply -f {crd_output_path}",
         check=False,
@@ -257,6 +259,29 @@ def main():
             print("✅ CRD applied (with --validate=false)")
     else:
         print("✅ CRD applied successfully")
+    
+    # Wait for CRD to be established before continuing
+    # This prevents "no matches for kind" errors when resources are applied too quickly
+    print("⏳ Waiting for CRD to be established...")
+    crd_name = "secretmanagerconfigs.secret-management.microscaler.io"
+    max_attempts = 30  # Wait up to 1 minute
+    
+    for i in range(max_attempts):
+        wait_result = run_command(
+            f"kubectl wait --for=condition=established crd {crd_name} --timeout=2s",
+            check=False,
+            capture_output=True
+        )
+        
+        if wait_result.returncode == 0:
+            print("✅ CRD is established and ready")
+            break
+        
+        if i < max_attempts - 1:
+            time.sleep(2)
+    else:
+        print("⚠️  Warning: CRD not established after 60 seconds, but continuing anyway", file=sys.stderr)
+        print("   Resources may fail to apply if CRD is not ready", file=sys.stderr)
 
 
 if __name__ == "__main__":

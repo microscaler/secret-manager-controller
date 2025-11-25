@@ -357,6 +357,64 @@ def ensure_registry_connected():
         return False
 
 
+def install_secret_manager_crd():
+    """Install SecretManagerConfig CRD from committed version.
+    
+    The CRD is committed to the repo, so we can install it during cluster setup.
+    This ensures the CRD is always available and established before any resources
+    are applied, preventing "no matches for kind" errors.
+    
+    Later, build_all_binaries.py can update the CRD if it has changed (kubectl apply is idempotent).
+    """
+    log_info("Installing SecretManagerConfig CRD...")
+    
+    # Get script directory and project root
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent
+    crd_path = project_root / "config" / "crd" / "secretmanagerconfig.yaml"
+    
+    if not crd_path.exists():
+        log_warn(f"CRD file not found at {crd_path}")
+        log_warn("CRD will be installed later by build_all_binaries.py")
+        return
+    
+    # Apply CRD (idempotent - won't fail if it already exists)
+    result = run_command(
+        ["kubectl", "apply", "-f", str(crd_path)],
+        check=False,
+        capture_output=True
+    )
+    
+    if result.returncode != 0:
+        log_warn(f"Failed to apply CRD: {result.stderr}")
+        log_warn("CRD will be installed later by build_all_binaries.py")
+        return
+    
+    log_info("✅ CRD applied successfully")
+    
+    # Wait for CRD to be established
+    log_info("Waiting for CRD to be established...")
+    crd_name = "secretmanagerconfigs.secret-management.microscaler.io"
+    max_attempts = 30  # Wait up to 1 minute
+    
+    for i in range(max_attempts):
+        wait_result = run_command(
+            f"kubectl wait --for=condition=established crd {crd_name} --timeout=2s",
+            check=False,
+            capture_output=True
+        )
+        
+        if wait_result.returncode == 0:
+            log_info("✅ CRD is established and ready")
+            return
+        
+        if i < max_attempts - 1:
+            time.sleep(2)
+    
+    log_warn("CRD not established after 60 seconds, but continuing")
+    log_warn("CRD may not be ready when resources are applied")
+
+
 def install_gitops_components():
     """Install FluxCD and ArgoCD components in the cluster.
     
@@ -485,6 +543,10 @@ data:
         input=configmap_yaml,
         check=True
     )
+    
+    # Install SecretManagerConfig CRD from committed version
+    # This ensures the CRD is always available and established before any resources are applied
+    install_secret_manager_crd()
     
     # Install FluxCD and ArgoCD components
     # These are infrastructure dependencies that should be available as soon as the cluster is up
