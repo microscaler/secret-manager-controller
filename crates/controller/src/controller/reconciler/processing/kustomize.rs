@@ -35,6 +35,14 @@ pub async fn process_kustomize_secrets(
         ProviderConfig::Azure(_) => "azure",
     };
 
+    // Extract environment and location from config
+    let environment = &config.spec.secrets.environment;
+    let location = match &config.spec.provider {
+        ProviderConfig::Gcp(_) => "automatic".to_string(), // GCP uses automatic replication
+        ProviderConfig::Aws(aws_config) => aws_config.region.clone(),
+        ProviderConfig::Azure(azure_config) => azure_config.vault_name.clone(),
+    };
+
     let publish_span = info_span!(
         "secrets.publish",
         provider = provider_name,
@@ -52,7 +60,10 @@ pub async fn process_kustomize_secrets(
             key.as_str(),
             config.spec.secrets.suffix.as_deref(),
         );
-        match provider.create_or_update_secret(&secret_name, value).await {
+        match provider
+            .create_or_update_secret(&secret_name, value, environment, &location)
+            .await
+        {
             Ok(was_updated) => {
                 count += 1;
                 observability::metrics::increment_secrets_published_total(provider_name, 1);

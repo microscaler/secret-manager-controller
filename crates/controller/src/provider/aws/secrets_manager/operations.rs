@@ -13,7 +13,13 @@ use super::AwsSecretManager;
 
 #[async_trait]
 impl SecretManagerProvider for AwsSecretManager {
-    async fn create_or_update_secret(&self, secret_name: &str, secret_value: &str) -> Result<bool> {
+    async fn create_or_update_secret(
+        &self,
+        secret_name: &str,
+        secret_value: &str,
+        environment: &str,
+        location: &str,
+    ) -> Result<bool> {
         let span = info_span!(
             "aws.secret.create_or_update",
             secret.name = secret_name,
@@ -34,13 +40,33 @@ impl SecretManagerProvider for AwsSecretManager {
 
             let operation_type = if !secret_exists {
                 // Create secret
-                info!("Creating AWS secret: {}", secret_name);
+                info!(
+                    provider = "aws",
+                    region = self._region,
+                    secret_name = secret_name,
+                    operation = "create",
+                    "Creating AWS secret: region={}, secret={}",
+                    self._region,
+                    secret_name
+                );
                 // In Pact mode, use a fixed ClientRequestToken for deterministic testing
                 let mut create_request = self
                     .client
                     .create_secret()
                     .name(secret_name)
-                    .secret_string(secret_value);
+                    .secret_string(secret_value)
+                    .tags(
+                        aws_sdk_secretsmanager::types::Tag::builder()
+                            .key("environment")
+                            .value(environment)
+                            .build(),
+                    )
+                    .tags(
+                        aws_sdk_secretsmanager::types::Tag::builder()
+                            .key("location")
+                            .value(location)
+                            .build(),
+                    );
 
                 if std::env::var("PACT_MODE").is_ok() {
                     // Use a fixed UUID for Pact testing to ensure request body matches
@@ -80,7 +106,14 @@ impl SecretManagerProvider for AwsSecretManager {
 
                 if let Some(current) = current_value {
                     if current == secret_value {
-                        debug!("AWS secret {} unchanged, skipping update", secret_name);
+                        debug!(
+                            provider = "aws",
+                            region = self._region,
+                            secret_name = secret_name,
+                            operation = "no_change",
+                            "AWS secret {} unchanged, skipping update",
+                            secret_name
+                        );
                         metrics::record_secret_operation(
                             "aws",
                             "no_change",
@@ -95,7 +128,15 @@ impl SecretManagerProvider for AwsSecretManager {
                 }
 
                 // Update secret (creates new version automatically)
-                info!("Updating AWS secret: {}", secret_name);
+                info!(
+                    provider = "aws",
+                    region = self._region,
+                    secret_name = secret_name,
+                    operation = "update",
+                    "Updating AWS secret: region={}, secret={}",
+                    self._region,
+                    secret_name
+                );
                 // In Pact mode, use a fixed ClientRequestToken for deterministic testing
                 let mut put_request = self
                     .client

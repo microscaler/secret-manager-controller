@@ -5,7 +5,7 @@
 use crate::controller::parser;
 use crate::controller::reconciler::processing::diff_discovery::detect_secret_diff;
 use crate::controller::reconciler::utils::construct_secret_name;
-use crate::crd::{ResourceSyncState, SecretManagerConfig};
+use crate::crd::{ProviderConfig, ResourceSyncState, SecretManagerConfig};
 use crate::observability;
 use crate::provider::SecretManagerProvider;
 use anyhow::Result;
@@ -39,6 +39,20 @@ pub async fn store_secrets(
         .and_then(|s| s.sync.as_ref())
         .and_then(|sync| sync.secrets.clone())
         .unwrap_or_default();
+
+    // Extract environment and location from config
+    let environment = &config.spec.secrets.environment;
+    let location = match &config.spec.provider {
+        ProviderConfig::Gcp(_) => "automatic".to_string(), // GCP uses automatic replication
+        ProviderConfig::Aws(aws_config) => aws_config.region.clone(),
+        ProviderConfig::Azure(azure_config) => {
+            // Extract location from vault URL if available, otherwise use vault name as fallback
+            // Azure vault URLs are typically: https://{vault-name}.vault.azure.net/
+            // Location is usually in the vault name or we can use a default
+            // For now, use the vault name as location identifier
+            azure_config.vault_name.clone()
+        }
+    };
 
     // Process all secrets (both enabled and disabled)
     for (key, entry) in &parsed_secrets.secrets {
@@ -85,7 +99,7 @@ pub async fn store_secrets(
             if should_update {
                 // Enabled secret: create/update as normal, and ensure it's enabled
                 match provider
-                    .create_or_update_secret(&secret_name, &entry.value)
+                    .create_or_update_secret(&secret_name, &entry.value, environment, &location)
                     .await
                 {
                     Ok(was_updated) => {
@@ -110,19 +124,35 @@ pub async fn store_secrets(
                             updated_count += 1;
                             if secret_exists {
                                 info!(
-                                    "✅ Updated secret '{}' from git (GitOps source of truth) - update_count={}",
-                                    secret_name, sync_state.update_count
+                                    provider = provider_name,
+                                    secret_name = secret_name,
+                                    environment = config.spec.secrets.environment,
+                                    operation = "update",
+                                    update_count = sync_state.update_count,
+                                    "✅ Updated secret '{}' from git (GitOps source of truth) - provider={}, environment={}, update_count={}",
+                                    secret_name, provider_name, config.spec.secrets.environment, sync_state.update_count
                                 );
                             } else {
                                 info!(
-                                    "✅ Created secret '{}' from git - update_count={}",
-                                    secret_name, sync_state.update_count
+                                    provider = provider_name,
+                                    secret_name = secret_name,
+                                    environment = config.spec.secrets.environment,
+                                    operation = "create",
+                                    update_count = sync_state.update_count,
+                                    "✅ Created secret '{}' from git - provider={}, environment={}, update_count={}",
+                                    secret_name, provider_name, config.spec.secrets.environment, sync_state.update_count
                                 );
                             }
                         } else {
                             info!(
-                                "✅ Secret '{}' unchanged (no update needed) - exists={}, update_count={}",
-                                secret_name, sync_state.exists, sync_state.update_count
+                                provider = provider_name,
+                                secret_name = secret_name,
+                                environment = config.spec.secrets.environment,
+                                operation = "no_change",
+                                exists = sync_state.exists,
+                                update_count = sync_state.update_count,
+                                "✅ Secret '{}' unchanged (no update needed) - provider={}, environment={}, exists={}, update_count={}",
+                                secret_name, provider_name, config.spec.secrets.environment, sync_state.exists, sync_state.update_count
                             );
                         }
                     }
@@ -168,7 +198,7 @@ pub async fn store_secrets(
                 // Update the value even though it's disabled
                 // This handles the case: #FOO_SECRET=baz (disabled but value updated)
                 match provider
-                    .create_or_update_secret(&secret_name, &entry.value)
+                    .create_or_update_secret(&secret_name, &entry.value, environment, &location)
                     .await
                 {
                     Ok(was_updated) => {

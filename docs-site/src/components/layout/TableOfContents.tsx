@@ -103,10 +103,10 @@ const TableOfContents: Component<TableOfContentsProps> = (props) => {
           // Prefer entries that are:
           // 1. More visible (higher ratio)
           // 2. Closer to the top of the viewport
-          if (ratio > highestRatio || (ratio === highestRatio && top < closestToTop)) {
-            mostVisible = entry;
-            highestRatio = ratio;
-            closestToTop = top;
+            if (ratio > highestRatio || (ratio === highestRatio && top < closestToTop)) {
+              mostVisible = entry;
+              highestRatio = ratio;
+              closestToTop = top;
           }
         }
       });
@@ -118,15 +118,15 @@ const TableOfContents: Component<TableOfContentsProps> = (props) => {
           setActiveAnchor(anchor);
         }
       } else {
-        // If no heading is intersecting, find the one that's just above the viewport
-        entries.forEach((entry) => {
-          const rect = entry.boundingClientRect;
+      // If no heading is intersecting, find the one that's just above the viewport
+      entries.forEach((entry) => {
+        const rect = entry.boundingClientRect;
           if (rect.top < 120 && rect.bottom > 0) {
             const anchor = entry.target.id;
             if (anchor) {
               setActiveAnchor(anchor);
-            }
-          }
+        }
+      }
         });
       }
     }, observerOptions);
@@ -198,11 +198,11 @@ const TableOfContents: Component<TableOfContentsProps> = (props) => {
       for (const heading of Array.from(allHeadings)) {
         const headingText = heading.textContent || heading.innerText || '';
         const headingId = headingText
-          .toLowerCase()
-          .replace(/[^\w\s-]/g, '')
-          .replace(/\s+/g, '-')
-          .replace(/-+/g, '-')
-          .trim();
+        .toLowerCase()
+        .replace(/[^\w\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .trim();
         if (headingId === id || heading.id === id) {
           element = heading as HTMLElement;
           if (!element.id || element.id !== id) {
@@ -228,29 +228,29 @@ const TableOfContents: Component<TableOfContentsProps> = (props) => {
   };
 
   const scrollToElement = (element: HTMLElement) => {
-    // Account for sticky header offset
-    const headerOffset = 112; // Height of sticky header with breadcrumbs
-    const elementPosition = element.getBoundingClientRect().top + window.pageYOffset;
-    const offsetPosition = elementPosition - headerOffset;
-    
-    window.scrollTo({
-      top: offsetPosition,
-      behavior: 'smooth'
-    });
-    
-    // Also scroll the main content area if it's scrollable
-    const mainContent = document.querySelector('main.flex-1.overflow-y-auto') as HTMLElement;
-    if (mainContent) {
-      const mainRect = mainContent.getBoundingClientRect();
-      const elementRect = element.getBoundingClientRect();
-      const relativeTop = elementRect.top - mainRect.top + mainContent.scrollTop - headerOffset;
-      mainContent.scrollTo({
-        top: Math.max(0, relativeTop),
+      // Account for sticky header offset
+      const headerOffset = 112; // Height of sticky header with breadcrumbs
+      const elementPosition = element.getBoundingClientRect().top + window.pageYOffset;
+      const offsetPosition = elementPosition - headerOffset;
+      
+      window.scrollTo({
+        top: offsetPosition,
         behavior: 'smooth'
       });
-    }
+      
+      // Also scroll the main content area if it's scrollable
+      const mainContent = document.querySelector('main.flex-1.overflow-y-auto') as HTMLElement;
+      if (mainContent) {
+        const mainRect = mainContent.getBoundingClientRect();
+        const elementRect = element.getBoundingClientRect();
+        const relativeTop = elementRect.top - mainRect.top + mainContent.scrollTop - headerOffset;
+        mainContent.scrollTo({
+          top: Math.max(0, relativeTop),
+          behavior: 'smooth'
+        });
+      }
   };
-
+    
   // Build a tree structure from headings (only H1 and H2)
   const buildHeadingTree = (): HeadingNode[] => {
     const allHeadings = headings();
@@ -301,18 +301,18 @@ const TableOfContents: Component<TableOfContentsProps> = (props) => {
 
     return (
       <li>
-        <button
+            <button
           onClick={() => scrollToHeading(node.heading.id)}
           class={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
-            isActive
-              ? 'bg-[#e8f0e9] text-[#2d4a2f] font-medium border-l-2 border-[#5a6c5d]'
-              : 'text-[#4a5568] hover:bg-[#f7f6f4] hover:text-[#2d3748]'
+              isActive
+                ? 'bg-[#e8f0e9] text-[#2d4a2f] font-medium border-l-2 border-[#5a6c5d]'
+                : 'text-[#4a5568] hover:bg-[#f7f6f4] hover:text-[#2d3748]'
           } ${indentClass}`}
-          aria-current={isActive ? 'location' : undefined}
-          aria-label={`Jump to section: ${node.heading.text}`}
-        >
-          {node.heading.text}
-        </button>
+            aria-current={isActive ? 'location' : undefined}
+            aria-label={`Jump to section: ${node.heading.text}`}
+          >
+            {node.heading.text}
+          </button>
         <Show when={hasChildren}>
           <ul class="ml-4 space-y-1 mt-1">
             <For each={node.children}>

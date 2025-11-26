@@ -61,6 +61,7 @@ export const userSections: DocSection[] = [
       { id: 'basic-usage', title: 'Basic Usage', file: 'tutorials/basic-usage.md' },
       { id: 'advanced-scenarios', title: 'Advanced Scenarios', file: 'tutorials/advanced-scenarios.md' },
       { id: 'troubleshooting', title: 'Troubleshooting', file: 'tutorials/troubleshooting.md' },
+      { id: 'secrets-viewer', title: 'Secrets Viewer', file: '' }, // Special component page
     ],
   },
   {

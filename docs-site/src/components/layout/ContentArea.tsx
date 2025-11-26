@@ -2,6 +2,7 @@ import { Component, createSignal, createEffect, Show, createMemo } from 'solid-j
 import { DocCategory, userSections, contributorSections } from '../../data/sections';
 import MarkdownRenderer from '../content/MarkdownRenderer';
 import PageNavigation from './PageNavigation';
+import SecretsViewer from '../pages/SecretsViewer';
 
 interface ContentAreaProps {
   category: DocCategory;
@@ -28,15 +29,27 @@ const ContentArea: Component<ContentAreaProps> = (props) => {
   // Use Vite's glob import to load markdown files
   const contentModules = import.meta.glob('../../data/content/**/*.md', { 
     eager: false,
-    as: 'raw' 
+    query: '?raw',
+    import: 'default'
   });
 
   // Watch for prop changes and reload content
   createEffect(() => {
+    // Skip loading markdown for special component pages
+    if (props.page === 'secrets-viewer') {
+      setContent('');
+      props.onContentChange?.('');
+      return;
+    }
     loadContent();
   });
 
   const loadContent = async () => {
+    // Skip special component pages
+    if (props.page === 'secrets-viewer') {
+      return;
+    }
+
     // Handle landing page (index)
     if (props.page === 'index' && !props.section) {
       setLoading(true);
@@ -127,16 +140,25 @@ const ContentArea: Component<ContentAreaProps> = (props) => {
 
         <Show when={!loading() && !error()}>
           <div>
-            {/* Reading time */}
-            <Show when={readingTime() > 0 && props.page !== 'index'}>
-              <div class="mb-6 text-sm text-[#6b7280] flex items-center gap-2">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span>{readingTime()} {readingTime() === 1 ? 'minute' : 'minutes'} read</span>
-              </div>
+            {/* Special component pages */}
+            <Show when={props.page === 'secrets-viewer'}>
+              <SecretsViewer onNavigate={props.onNavigate} />
             </Show>
-            <MarkdownRenderer content={content()} />
+            
+            {/* Regular markdown pages */}
+            <Show when={props.page !== 'secrets-viewer'}>
+              {/* Reading time */}
+              <Show when={readingTime() > 0 && props.page !== 'index'}>
+                <div class="mb-6 text-sm text-[#6b7280] flex items-center gap-2">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>{readingTime()} {readingTime() === 1 ? 'minute' : 'minutes'} read</span>
+                </div>
+              </Show>
+              <MarkdownRenderer content={content()} />
+            </Show>
+            
             <PageNavigation
               category={props.category}
               section={props.section}

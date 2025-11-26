@@ -28,6 +28,14 @@ pub async fn store_properties(
         return Ok((0, std::collections::HashMap::new()));
     }
 
+    // Extract environment and location from config
+    let environment = &config.spec.secrets.environment;
+    let location = match &config.spec.provider {
+        ProviderConfig::Gcp(_) => "automatic".to_string(), // GCP uses automatic replication
+        ProviderConfig::Aws(aws_config) => aws_config.region.clone(),
+        ProviderConfig::Azure(azure_config) => azure_config.vault_name.clone(),
+    };
+
     // Initialize synced_properties map from existing status (preserve state across reconciliations)
     let mut synced_properties = config
         .status
@@ -164,7 +172,10 @@ pub async fn store_properties(
                             key.as_str(),
                             config.spec.secrets.suffix.as_deref(),
                         );
-                        match provider.create_or_update_secret(&config_name, &value).await {
+                        match provider
+                            .create_or_update_secret(&config_name, &value, environment, &location)
+                            .await
+                        {
                             Ok(was_updated) => {
                                 config_count += 1;
 
@@ -321,7 +332,7 @@ pub async fn store_properties(
             config.spec.secrets.suffix.as_deref(),
         );
         match provider
-            .create_or_update_secret(&secret_name, &properties_json)
+            .create_or_update_secret(&secret_name, &properties_json, environment, &location)
             .await
         {
             Ok(was_updated) => {

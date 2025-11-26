@@ -38,6 +38,7 @@ default_registry('localhost:5000')
 # Tilt expands 'mock-webhook' to 'localhost:5000/mock-webhook' but the custom_build
 # is named 'mock-webhook', which Tilt correctly matches during substitution
 # docs-site is built with docker_build and Tilt will substitute it in the deployment
+# postgres-manager is built with custom_build and Tilt will substitute it in the deployment
 update_settings(suppress_unused_image_warnings=['localhost:5000/mock-webhook', 'docs-site'])
 
 # Get the directory where this Tiltfile is located
@@ -78,7 +79,7 @@ local_resource(
         './scripts/tilt/build_all_binaries.py',
     ],
     resource_deps=[],
-    labels=['controllers', 'pact'],
+    labels=['controllers',],
     allow_parallel=True,
 )
 
@@ -341,6 +342,27 @@ custom_build(
     skips_local_docker=False,
 )
 
+# Build postgres-manager Docker image (separate from mock servers)
+# Note: Image name is 'postgres-manager' (without registry prefix)
+# Tilt will automatically prepend default_registry('localhost:5000') when substituting
+custom_build(
+    'postgres-manager',
+    'python3 scripts/tilt/docker_build_postgres_manager.py',
+    deps=[
+        'build_artifacts/mock-server/postgres-manager',
+        'dockerfiles/Dockerfile.postgres-manager',
+        './scripts/tilt/docker_build_postgres_manager.py',
+    ],
+    # File dependencies in deps ensure binaries exist before build
+    # Note: No env needed - script uses EXPECTED_REF from Tilt
+    tag='tilt',
+    live_update=[
+        sync('build_artifacts/mock-server/postgres-manager', '/app/postgres-manager'),
+        run('kill -HUP 1'),
+    ],
+    skips_local_docker=False,
+)
+
 # Apply Pact infrastructure Kubernetes resources
 # Order matters: ConfigMap is created first, then populated, then deployment
 k8s_yaml(kustomize('pact-broker/k8s'))
@@ -389,6 +411,39 @@ k8s_resource(
     # All services (pact-broker, aws-mock-server, gcp-mock-server, azure-mock-server, mock-webhook)
     # are part of this single deployment, accessed via their respective services
     # Contract publishing is handled by the manager sidecar which reads from the ConfigMap
+)
+
+# Populate the postgres-migrations ConfigMap from local migration SQL files
+# This runs whenever migration files are added or changed
+# The ConfigMap is then used by the postgres-manager sidecar to run migrations
+local_resource(
+    'populate-migrations-configmap',
+    cmd='python3 scripts/tilt/populate_migrations_configmap.py',
+    deps=[
+        'scripts/tilt/populate_migrations_configmap.py',
+        'crates/pact-mock-server/migrations',  # Watch the entire migrations directory for changes
+    ],
+    labels=['pact'],
+    resource_deps=[],  # Can run independently, but should run before postgres
+    allow_parallel=False,
+)
+
+# PostgreSQL Database for Mock Servers
+# Provides persistent storage for secrets across pod restarts
+# Each provider uses a separate schema (gcp, aws, azure) for isolation
+# Includes a migration manager sidecar that watches ConfigMap and runs migrations automatically
+k8s_resource(
+    'postgres',
+    labels=['pact'],
+    port_forwards=[
+        '5432:5432',  # PostgreSQL database
+        '1239:1239',  # Postgres manager health endpoint
+    ],
+    resource_deps=['populate-migrations-configmap'],  # Wait for ConfigMap to be populated
+    # Tilt automatically detects image dependency from k8s_yaml and substitutes 'localhost:5000/postgres-manager' 
+    # with the built image reference (localhost:5000/postgres-manager:tilt-{hash})
+    # PostgreSQL is deployed via k8s_yaml above (pact-broker/k8s/postgres-deployment.yaml)
+    # The postgres-manager sidecar watches ConfigMap and runs migrations automatically once postgres is ready
 )
 
 # ====================

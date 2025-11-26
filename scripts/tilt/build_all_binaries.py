@@ -136,6 +136,7 @@ def main():
         "azure-mock-server",
         "webhook",
         "manager",
+        "postgres-manager",
     ]
     
     print("🔍 Verifying binaries were built...")

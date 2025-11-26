@@ -168,6 +168,8 @@ spec:
           value: "1234"
         - name: MANAGER_URL
           value: "http://localhost:1238"
+        - name: DATABASE_URL
+          value: "postgresql://pact:pact@postgres.secret-manager-controller-pact-broker.svc.cluster.local:5432/pact_mock_servers"
         resources:
           requests:
             memory: 64Mi
@@ -226,6 +228,8 @@ spec:
           value: "1235"
         - name: MANAGER_URL
           value: "http://localhost:1238"
+        - name: DATABASE_URL
+          value: "postgresql://pact:pact@postgres.secret-manager-controller-pact-broker.svc.cluster.local:5432/pact_mock_servers"
         resources:
           requests:
             memory: 64Mi
@@ -284,6 +288,8 @@ spec:
           value: "1236"
         - name: MANAGER_URL
           value: "http://localhost:1238"
+        - name: DATABASE_URL
+          value: "postgresql://pact:pact@postgres.secret-manager-controller-pact-broker.svc.cluster.local:5432/pact_mock_servers"
         resources:
           requests:
             memory: 64Mi
@@ -462,7 +468,7 @@ spec:
   type: ClusterIP
   ports:
   - port: 1234
-    targetPort: 1234
+    targetPort: 1235
     protocol: TCP
     name: http
   selector:

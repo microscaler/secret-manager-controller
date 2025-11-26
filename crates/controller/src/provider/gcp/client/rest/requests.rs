@@ -30,16 +30,24 @@ pub struct CreateSecretRequest {
     pub secret_id: String,
     /// Replication configuration for the secret
     pub replication: Replication,
+    /// Labels for the secret (required: must include "environment" and "location")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<std::collections::HashMap<String, String>>,
 }
 
 impl CreateSecretRequest {
-    /// Create a new request with automatic replication
-    pub fn new(secret_id: String) -> Self {
+    /// Create a new request with automatic replication and labels
+    pub fn new(secret_id: String, environment: String, location: String) -> Self {
+        let mut labels = std::collections::HashMap::new();
+        labels.insert("environment".to_string(), environment);
+        labels.insert("location".to_string(), location);
+
         Self {
             secret_id,
             replication: Replication {
                 automatic: Some(AutomaticReplication {}),
             },
+            labels: Some(labels),
         }
     }
 }
