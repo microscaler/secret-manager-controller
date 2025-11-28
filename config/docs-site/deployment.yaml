@@ -17,8 +17,8 @@ spec:
     spec:
       containers:
       - name: docs-site
-        image: docs-site:latest
-        imagePullPolicy: IfNotPresent
+        image: docs-site
+        imagePullPolicy: Never
         ports:
         - containerPort: 80
           name: http

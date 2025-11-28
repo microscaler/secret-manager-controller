@@ -10,7 +10,9 @@ Configure the Secret Manager Controller to work with AWS Secrets Manager.
 
 ## IAM Permissions
 
-Your AWS credentials need the following permissions:
+Your AWS credentials need the following minimum permissions to create and manage secrets:
+
+### Minimum Required Permissions
 
 ```json
 {
@@ -19,8 +21,48 @@ Your AWS credentials need the following permissions:
     {
       "Effect": "Allow",
       "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:PutSecretValue",
         "secretsmanager:GetSecretValue",
         "secretsmanager:DescribeSecret",
+        "secretsmanager:ListSecrets",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:TagResource"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+### Recommended: Scoped Permissions
+
+For better security, scope permissions to specific secret paths:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:TagResource"
+      ],
+      "Resource": [
+        "arn:aws:secretsmanager:*:*:secret:my-service/*",
+        "arn:aws:secretsmanager:*:*:secret:production/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
         "secretsmanager:ListSecrets"
       ],
       "Resource": "*"
@@ -28,6 +70,27 @@ Your AWS credentials need the following permissions:
   ]
 }
 ```
+
+### Using AWS Managed Policies
+
+You can use the AWS managed policy `SecretsManagerReadWrite` for full access:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:*"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+**Note:** The managed policy `SecretsManagerReadWrite` provides read/write access. For production, prefer scoped permissions above.
 
 ## Authentication Methods
 
